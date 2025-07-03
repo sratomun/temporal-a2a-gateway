@@ -180,4 +180,6 @@ python google_a2a_sdk_integration_example.py
 
 ## License
 
-Apache License 2.0
+MIT License - see [LICENSE](LICENSE) file for details.
+This project is free for commercial and personal use.
+
