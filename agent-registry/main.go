@@ -20,6 +20,12 @@ import (
 // Agent Registry Service with Qdrant
 // Provides semantic agent discovery backed by Qdrant vector database
 
+// A2A Protocol v0.2.5 compliant ISO 8601 timestamp generator
+// Returns current time in UTC with millisecond precision: 2024-07-03T14:30:00.000Z
+func newISO8601Timestamp() string {
+	return time.Now().UTC().Format(time.RFC3339Nano)[:23] + "Z"
+}
+
 type AgentRegistry struct {
 	qdrantClient     *qdrant.Client
 	embeddingService EmbeddingService
@@ -724,7 +730,7 @@ func (ar *AgentRegistry) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Status:    "healthy",
 		Service:   "agent-registry",
 		Version:   "1.0.0",
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Timestamp: newISO8601Timestamp(),
 		Qdrant:    qdrantStatus,
 	}
 

@@ -21,6 +21,45 @@ import (
 // A2A Gateway Service in Go
 // Implements JSON-RPC 2.0 A2A Protocol with Temporal workflow orchestration
 
+// A2A Protocol v0.2.5 compliant ISO 8601 timestamp generator
+// Returns current time in UTC with millisecond precision: 2024-07-03T14:30:00.000Z
+func newISO8601Timestamp() string {
+	return time.Now().UTC().Format(time.RFC3339Nano)[:23] + "Z"
+}
+
+// A2A Protocol deprecation middleware
+// Adds deprecation warnings for legacy methods with 3-month transition period
+func addDeprecationWarnings(w http.ResponseWriter, method string) {
+	// Set deprecation HTTP headers
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Sunset", "2024-10-03T00:00:00Z") // 3 months from July 2024
+	w.Header().Set("Link", `</docs/api.md>; rel="sunset"`)
+	
+	// Log deprecation usage for monitoring/analytics
+	log.Printf("⚠️  DEPRECATED METHOD USED: %s - Will be removed 2024-10-03. Use A2A v0.2.5 methods instead.", method)
+}
+
+// A2A Protocol v0.2.5 unified timestamp validation
+// Validates ISO 8601 format: 2024-07-03T14:30:00.000Z (UTC + milliseconds)
+func validateISO8601Timestamp(timestamp string) error {
+	if timestamp == "" {
+		return fmt.Errorf("timestamp cannot be empty")
+	}
+	
+	// Parse using RFC3339Nano format (supports milliseconds)
+	_, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return fmt.Errorf("invalid ISO 8601 timestamp format: %s (expected: 2024-07-03T14:30:00.000Z)", timestamp)
+	}
+	
+	// Additional validation: ensure UTC timezone (ends with Z)
+	if !strings.HasSuffix(timestamp, "Z") {
+		return fmt.Errorf("timestamp must be in UTC timezone (end with Z): %s", timestamp)
+	}
+	
+	return nil
+}
+
 type Gateway struct {
 	temporalClient client.Client
 	redisClient    *redis.Client
@@ -503,6 +542,22 @@ func (g *Gateway) storeTaskInRedis(task *StoredTask) error {
 	// Use pipeline for atomic operations
 	pipe := g.redisClient.Pipeline()
 	
+	// Validate input timestamps
+	if err := validateISO8601Timestamp(task.A2ATask.CreatedAt); err != nil {
+		return fmt.Errorf("invalid CreatedAt timestamp: %w", err)
+	}
+	if task.A2ATask.Status.Timestamp != "" {
+		if err := validateISO8601Timestamp(task.A2ATask.Status.Timestamp); err != nil {
+			return fmt.Errorf("invalid Status.Timestamp: %w", err)
+		}
+	}
+	
+	// Generate and validate updated timestamp
+	updatedTimestamp := newISO8601Timestamp()
+	if err := validateISO8601Timestamp(updatedTimestamp); err != nil {
+		return fmt.Errorf("generated timestamp validation failed: %w", err)
+	}
+	
 	// Store main task data
 	errorStr := ""
 	if task.A2ATask.Error != nil {
@@ -514,7 +569,7 @@ func (g *Gateway) storeTaskInRedis(task *StoredTask) error {
 		"workflow_id": task.WorkflowID,
 		"status":      task.A2ATask.Status.State,
 		"created":     task.A2ATask.CreatedAt,
-		"updated":     time.Now().UTC().Format(time.RFC3339),
+		"updated":     updatedTimestamp,
 		"error":       errorStr,
 	}
 	
@@ -567,7 +622,7 @@ func (g *Gateway) storeTaskInRedis(task *StoredTask) error {
 	}
 	
 	// Set TTL based on status
-	if task.A2ATask.Status.State == "completed" || task.A2ATask.Status.State == "failed" || task.A2ATask.Status.State == "cancelled" {
+	if task.A2ATask.Status.State == "completed" || task.A2ATask.Status.State == "failed" || task.A2ATask.Status.State == "canceled" {
 		pipe.Expire(ctx, taskKey, 24*time.Hour) // 1 day for completed
 	} else {
 		pipe.Expire(ctx, taskKey, 7*24*time.Hour) // 7 days for active
@@ -599,7 +654,7 @@ func (g *Gateway) getTaskFromRedis(taskID string) (*StoredTask, error) {
 	status := data["status"]
 	
 	// Use current time for timestamp in ISO 8601 format (A2A spec compliant)
-	timestamp := time.Now().UTC().Format(time.RFC3339)
+	timestamp := newISO8601Timestamp()
 	if data["createdAt"] != "" {
 		// Try to parse created time, fallback to current time
 		if createdTime, err := time.Parse(time.RFC3339, data["createdAt"]); err == nil {
@@ -671,10 +726,16 @@ func (g *Gateway) updateTaskStatusInRedis(taskID, status string, result interfac
 	
 	pipe := g.redisClient.Pipeline()
 	
+	// Generate and validate timestamp
+	timestamp := newISO8601Timestamp()
+	if err := validateISO8601Timestamp(timestamp); err != nil {
+		return fmt.Errorf("generated timestamp validation failed: %w", err)
+	}
+	
 	// Update task fields
 	updates := map[string]interface{}{
 		"status":  status,
-		"updated": time.Now().UTC().Format(time.RFC3339),
+		"updated": timestamp,
 		"error":   errorMsg,
 	}
 	
@@ -757,7 +818,7 @@ func (g *Gateway) cleanupTaskIndexes(taskID string) error {
 	pipe.ZRem(ctx, "tasks:by_created", taskID)
 
 	// Remove from status indexes
-	statusIndexes := []string{"pending", "running", "in_progress", "completed", "failed", "cancelled"}
+	statusIndexes := []string{"submitted", "running", "in_progress", "completed", "failed", "canceled"}
 	for _, status := range statusIndexes {
 		pipe.SRem(ctx, fmt.Sprintf("tasks:by_status:%s", status), taskID)
 	}
@@ -803,7 +864,7 @@ func (g *Gateway) cleanupOldCompletedTasks(olderThanHours int) error {
 			continue // Skip if we can't get status
 		}
 
-		if status == "completed" || status == "failed" || status == "cancelled" {
+		if status == "completed" || status == "failed" || status == "canceled" {
 			// Force remove the task and its indexes
 			pipe := g.redisClient.Pipeline()
 			pipe.Del(ctx, taskKey)
@@ -895,10 +956,13 @@ func (g *Gateway) handleTasks(w http.ResponseWriter, r *http.Request) {
 	
 	// Backward compatibility for existing tests
 	case "a2a.createTask":
+		addDeprecationWarnings(w, "a2a.createTask")
 		g.handleCreateTask(w, &req)
 	case "a2a.getTask":
+		addDeprecationWarnings(w, "a2a.getTask")
 		g.handleGetTask(w, &req)
 	case "a2a.cancelTask":
+		addDeprecationWarnings(w, "a2a.cancelTask")
 		g.handleCancelTask(w, &req)
 		
 	default:
@@ -976,7 +1040,7 @@ func (g *Gateway) handleCancelTask(w http.ResponseWriter, req *JSONRPCRequest) {
 	}
 
 	// Check if task can be cancelled
-	if storedTask.A2ATask.Status.State == "completed" || storedTask.A2ATask.Status.State == "failed" || storedTask.A2ATask.Status.State == "cancelled" {
+	if storedTask.A2ATask.Status.State == "completed" || storedTask.A2ATask.Status.State == "failed" || storedTask.A2ATask.Status.State == "canceled" {
 		g.sendError(w, req, ErrorTaskStateInvalid, fmt.Sprintf("Cannot cancel task in state: %s", storedTask.A2ATask.Status.State))
 		return
 	}
@@ -991,13 +1055,13 @@ func (g *Gateway) handleCancelTask(w http.ResponseWriter, req *JSONRPCRequest) {
 	}
 
 	// Update task status in Redis
-	err = g.updateTaskStatusInRedis(params.ID, "cancelled", nil, "")
+	err = g.updateTaskStatusInRedis(params.ID, "canceled", nil, "")
 	if err != nil {
 		log.Printf("⚠️ Failed to update task status in Redis: %v", err)
 	}
 
-	g.sendResult(w, req, map[string]interface{}{
-		"status": "cancelled",
+	g.sendDeprecatedResult(w, req, map[string]interface{}{
+		"status": "canceled",
 	})
 }
 
@@ -1192,7 +1256,7 @@ func (g *Gateway) handleCreateTask(w http.ResponseWriter, req *JSONRPCRequest) {
 	}
 
 	// Create A2A compliant task structure
-	createdAt := time.Now().UTC().Format(time.RFC3339)
+	createdAt := newISO8601Timestamp()
 	
 	// Generate contextId from metadata or create one
 	contextId := fmt.Sprintf("ctx-%s", taskID[:8])
@@ -1204,9 +1268,9 @@ func (g *Gateway) handleCreateTask(w http.ResponseWriter, req *JSONRPCRequest) {
 		}
 	}
 
-	// Create A2A spec compliant running status
+	// Create A2A spec compliant submitted status
 	taskStatus := TaskStatus{
-		State:     "working",     // A2A spec compliant: use 'state' with 'working' status
+		State:     "submitted",   // A2A spec compliant: initial 'submitted' state before execution
 		Timestamp: createdAt,     // A2A spec compliant: use 'timestamp'
 	}
 
@@ -1232,6 +1296,13 @@ func (g *Gateway) handleCreateTask(w http.ResponseWriter, req *JSONRPCRequest) {
 		// Continue - task will still be tracked via Temporal
 	}
 
+	// Transition task from "submitted" to "working" now that workflow has started
+	err = g.updateTaskStatusInRedis(taskID, "working", nil, "")
+	if err != nil {
+		log.Printf("⚠️ Failed to update task status to working: %v", err)
+		// Continue - task will still be tracked via Temporal
+	}
+
 	log.Printf("✅ Started workflow %s on queue %s", taskID, taskQueue)
 
 	// Start background goroutine to monitor workflow completion
@@ -1242,7 +1313,7 @@ func (g *Gateway) handleCreateTask(w http.ResponseWriter, req *JSONRPCRequest) {
 		agentName = "Echo Agent"
 	}
 
-	g.sendResult(w, req, &TaskResult{
+	g.sendDeprecatedResult(w, req, &TaskResult{
 		TaskID: taskID,
 		Status: "running",
 		Agent: AgentInfo{
@@ -1287,7 +1358,7 @@ func (g *Gateway) handleGetTask(w http.ResponseWriter, req *JSONRPCRequest) {
 	// Return the embedded A2A task
 	a2aTask := g.getA2ATask(storedTask)
 
-	g.sendResult(w, req, a2aTask)
+	g.sendDeprecatedResult(w, req, a2aTask)
 }
 
 func (g *Gateway) monitorWorkflow(taskID string, workflowRun client.WorkflowRun) {
@@ -1391,23 +1462,77 @@ func (g *Gateway) handleA2AMessageSend(w http.ResponseWriter, req *JSONRPCReques
 
 	log.Printf("📨 A2A message/send for agent %s", params.AgentID)
 
-	// Convert to createTask format
-	createTaskParams := CreateTaskParams{
-		AgentID:  params.AgentID,
-		Input:    params.Message,
-		Metadata: params.Metadata,
+	// Generate unique task ID
+	taskID := uuid.New().String()
+	
+	// Create A2A-compliant task directly without delegation
+	ctx := context.Background()
+	taskQueue := fmt.Sprintf("%s-tasks", params.AgentID)
+	workflowType := fmt.Sprintf("%sWorkflow", params.AgentID)
+	
+	// Temporal workflow options
+	workflowOptions := client.StartWorkflowOptions{
+		ID:        taskID,
+		TaskQueue: taskQueue,
 	}
-
-	// Create new request for createTask
-	createTaskReq := &JSONRPCRequest{
-		Jsonrpc: req.Jsonrpc,
-		Method:  "a2a.createTask",
-		Params:  createTaskParams,
-		ID:      req.ID,
+	
+	// Start Temporal workflow
+	workflowRun, err := g.temporalClient.ExecuteWorkflow(ctx, workflowOptions, workflowType, params.Message)
+	if err != nil {
+		log.Printf("❌ Failed to start workflow: %v", err)
+		g.sendError(w, req, ErrorTaskCreationFailed, fmt.Sprintf("Failed to create task: %v", err))
+		return
 	}
-
-	// Delegate to existing createTask implementation
-	g.handleCreateTask(w, createTaskReq)
+	
+	// Create A2A-compliant task
+	currentTime := newISO8601Timestamp()
+	contextId := fmt.Sprintf("ctx-%s", taskID[:8])
+	if params.Metadata != nil {
+		if ctxId, exists := params.Metadata["contextId"]; exists {
+			if ctxIdStr, ok := ctxId.(string); ok {
+				contextId = ctxIdStr
+			}
+		}
+	}
+	
+	// Create task with working state (A2A spec: message/send is immediate execution)
+	taskStatus := TaskStatus{
+		State:     "working",
+		Timestamp: currentTime,
+	}
+	
+	a2aTask := A2ATask{
+		ID:        taskID,
+		ContextID: contextId,
+		Status:    taskStatus,
+		Kind:      "task",
+		AgentID:   params.AgentID,
+		Input:     params.Message,
+		Result:    nil,  // A2A spec: initially null until completion
+		Error:     nil,  // A2A spec: initially null unless error occurs
+		Metadata: map[string]interface{}{
+			"source":     "a2a-gateway",
+			"method":     "message/send",
+			"workflowId": workflowRun.GetID(),
+			"timestamp":  currentTime,
+		},
+		CreatedAt: currentTime,
+	}
+	
+	// Store in Redis with working state (A2A spec: message/send starts as working)
+	storedTask := &StoredTask{A2ATask: a2aTask}
+	err = g.storeTaskInRedis(storedTask)
+	if err != nil {
+		log.Printf("⚠️ Failed to store task in Redis: %v", err)
+	}
+	
+	// Start monitoring
+	go g.monitorWorkflow(taskID, workflowRun)
+	
+	log.Printf("✅ A2A task %s created successfully", taskID)
+	
+	// Return A2A-compliant task response (not wrapped TaskResult)
+	g.sendResult(w, req, a2aTask)
 }
 
 func (g *Gateway) handleA2ATasksGet(w http.ResponseWriter, req *JSONRPCRequest) {
@@ -1530,7 +1655,7 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, r *http.Request) {
 	
 	health := map[string]interface{}{
 		"status":    "healthy",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"timestamp": newISO8601Timestamp(),
 		"version":   "0.4.0-go",
 		"service":   "a2a-gateway-go",
 		"temporal": map[string]interface{}{
@@ -1553,6 +1678,33 @@ func (g *Gateway) sendResult(w http.ResponseWriter, req *JSONRPCRequest, result 
 	response := &JSONRPCResponse{
 		Jsonrpc: "2.0",
 		Result:  result,
+		ID:      req.ID,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// sendDeprecatedResult sends a JSON-RPC response with deprecation flag for legacy methods
+func (g *Gateway) sendDeprecatedResult(w http.ResponseWriter, req *JSONRPCRequest, result interface{}) {
+	// Wrap result with deprecation metadata
+	deprecatedResult := map[string]interface{}{
+		"deprecated": true,
+		"migration_info": map[string]interface{}{
+			"sunset_date": "2024-10-03T00:00:00Z",
+			"replacement_methods": map[string]string{
+				"a2a.createTask":  "message/send",
+				"a2a.getTask":     "tasks/get", 
+				"a2a.cancelTask":  "tasks/cancel",
+				"a2a.sendMessage": "message/send",
+			},
+		},
+		"result": result,
+	}
+	
+	response := &JSONRPCResponse{
+		Jsonrpc: "2.0",
+		Result:  deprecatedResult,
 		ID:      req.ID,
 	}
 
@@ -1701,7 +1853,7 @@ func (g *Gateway) normalizeTaskInput(input interface{}) interface{} {
 									"content": messageStr,
 								},
 							},
-							"timestamp": time.Now().UTC().Format(time.RFC3339) + "Z",
+							"timestamp": newISO8601Timestamp(),
 						},
 					},
 				}
@@ -1721,7 +1873,7 @@ func (g *Gateway) normalizeTaskInput(input interface{}) interface{} {
 									"content": textStr,
 								},
 							},
-							"timestamp": time.Now().UTC().Format(time.RFC3339) + "Z",
+							"timestamp": newISO8601Timestamp(),
 						},
 					},
 				}
@@ -1741,7 +1893,7 @@ func (g *Gateway) normalizeTaskInput(input interface{}) interface{} {
 							"content": inputStr,
 						},
 					},
-					"timestamp": time.Now().UTC().Format(time.RFC3339) + "Z",
+					"timestamp": newISO8601Timestamp(),
 				},
 			},
 		}
@@ -1813,10 +1965,13 @@ func (g *Gateway) handleAgentProxy(w http.ResponseWriter, r *http.Request) {
 		g.handleCancelTask(w, &req)
 	// Keep backward compatibility with old method names
 	case "a2a.sendMessage":
+		addDeprecationWarnings(w, "a2a.sendMessage")
 		g.handleSendMessageProxy(w, &req, agentId)
 	case "a2a.getTask":
+		addDeprecationWarnings(w, "a2a.getTask")
 		g.handleGetTask(w, &req)
 	case "a2a.cancelTask":
+		addDeprecationWarnings(w, "a2a.cancelTask")
 		g.handleCancelTask(w, &req)
 	default:
 		g.sendError(w, &req, ErrorMethodNotFound, fmt.Sprintf("Method not found: %s", req.Method))
@@ -1936,11 +2091,11 @@ func (g *Gateway) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest, 
 	// Store task in Redis using the correct A2A-compliant format
 	ctx := context.Background()
 	taskKey := fmt.Sprintf("task:%s", taskID)
-	currentTime := time.Now().UTC().Format(time.RFC3339)
+	currentTime := newISO8601Timestamp()
 	
 	// Create A2A v0.2.5 compliant TaskStatus
 	taskStatus := TaskStatus{
-		State:     "working",     // A2A spec compliant: use 'state' with 'working' status
+		State:     "submitted",   // A2A spec compliant: initial 'submitted' state before execution
 		Timestamp: currentTime,   // A2A spec compliant: use 'timestamp'
 	}
 	
@@ -1963,7 +2118,7 @@ func (g *Gateway) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest, 
 	taskData := map[string]interface{}{
 		"id":         taskID,
 		"contextId":  contextID,
-		"status":     "working",
+		"status":     "submitted", // Initial submitted state before execution
 		"agentId":    agentId,
 		"createdAt":  currentTime,
 		"updatedAt":  currentTime,
@@ -1990,6 +2145,13 @@ func (g *Gateway) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest, 
 		log.Printf("❌ Failed to store task in Redis: %v", err)
 		g.sendError(w, req, ErrorInternalError, "Failed to store task")
 		return
+	}
+	
+	// Transition task from "submitted" to "working" now that workflow has started
+	err = g.updateTaskStatusInRedis(taskID, "working", nil, "")
+	if err != nil {
+		log.Printf("⚠️ Failed to update task status to working: %v", err)
+		// Continue - task will still be tracked via Temporal
 	}
 	
 	log.Printf("✅ Task %s stored successfully", taskID)

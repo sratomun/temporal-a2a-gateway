@@ -27,6 +27,7 @@ All API requests are made to agent-specific endpoints using HTTP POST with JSON-
 - **Method**: POST
 - **Streaming**: Server-Sent Events (SSE) support planned
 - **Security**: HTTPS required for production environments
+- **Timestamps**: All timestamps use ISO 8601 format with millisecond precision in UTC (`YYYY-MM-DDTHH:mm:ss.sssZ`)
 
 ## Authentication
 
@@ -145,7 +146,7 @@ interface FileData {
       "id": "echo-agent",
       "name": "Echo Agent"
     },
-    "created": "2024-01-01T12:00:00Z"
+    "created": "2024-07-03T14:30:00.000Z"
   },
   "id": "send-001"
 }
@@ -185,8 +186,8 @@ Retrieves the current status and results of a task.
       "id": "echo-agent",
       "name": "Echo Agent"
     },
-    "created": "2024-01-01T12:00:00Z",
-    "lastUpdated": "2024-01-01T12:00:05Z"
+    "created": "2024-07-03T14:30:00.000Z",
+    "lastUpdated": "2024-07-03T14:30:05.123Z"
   },
   "id": "get-001"
 }
@@ -203,8 +204,8 @@ Retrieves the current status and results of a task.
       "id": "echo-agent",
       "name": "Echo Agent"
     },
-    "created": "2024-01-01T12:00:00Z",
-    "completed": "2024-01-01T12:00:10Z",
+    "created": "2024-07-03T14:30:00.000Z",
+    "completed": "2024-07-03T14:30:10.456Z",
     "messages": [
       {
         "messageId": "msg-001",
@@ -263,7 +264,7 @@ Cancels a running task according to A2A specification.
   "result": {
     "taskId": "47df4688-5266-435e-9700-54773d6e2c81",
     "status": "canceled",
-    "canceledAt": "2024-01-01T12:00:15Z"
+    "canceledAt": "2024-07-03T14:30:15.789Z"
   },
   "id": "cancel-001"
 }
@@ -275,11 +276,51 @@ Real-time task updates via Server-Sent Events (SSE).
 
 **Note:** SSE streaming support is planned for future implementation to provide real-time task progress updates.
 
+## Legacy Methods (Deprecated)
+
+### a2a.createTask (DEPRECATED)
+
+⚠️ **DEPRECATED as of v0.4.1** - Use `message/send` instead
+
+**Deprecation Timeline:**
+- **Notice Date**: July 2024
+- **Sunset Date**: October 3, 2024 (3 months)
+- **Migration Required**: All clients should migrate to `message/send`
+
+**Deprecation Indicators:**
+- HTTP Header: `Deprecation: true`
+- HTTP Header: `Sunset: 2024-10-03T00:00:00.000Z`
+- Response includes `deprecated: true` flag
+- Server logs deprecation usage for monitoring
+
+**Migration Guide:**
+```json
+// OLD (deprecated)
+{
+  "method": "a2a.createTask",
+  "params": {
+    "message": "Hello world"
+  }
+}
+
+// NEW (recommended)
+{
+  "method": "message/send", 
+  "params": {
+    "message": {
+      "messageId": "msg-001",
+      "role": "user",
+      "parts": [{"type": "text", "text": "Hello world"}]
+    }
+  }
+}
+```
+
 ## Task Lifecycle States
 
 Tasks progress through states as defined in A2A Protocol v0.2.5:
 
-- **`submitted`**: Task has been received and queued
+- **`pending`**: Task has been received and queued (NEW in v0.4.1)
 - **`working`**: Task is actively being processed  
 - **`input_required`**: Task needs additional input from user (planned)
 - **`completed`**: Task finished successfully
@@ -287,6 +328,11 @@ Tasks progress through states as defined in A2A Protocol v0.2.5:
 - **`failed`**: Task failed due to an error
 - **`rejected`**: Task was rejected by the agent (planned)
 - **`auth_required`**: Task requires authentication (planned)
+
+### State Transitions
+```
+pending → working → {completed|failed|canceled}
+```
 
 ## Agent Card Support
 
@@ -406,7 +452,7 @@ Returns gateway health status following A2A best practices:
 ```json
 {
   "status": "healthy",
-  "timestamp": "2025-07-03T00:06:46Z",
+  "timestamp": "2025-07-03T00:06:46.123Z",
   "version": "0.4.0-go",
   "service": "a2a-gateway-temporal",
   "protocol": {
