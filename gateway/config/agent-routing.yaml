@@ -1,0 +1,31 @@
+# A2A Gateway Agent Routing Configuration
+# This file maps agent names from the registry to Temporal task queues and workflows
+#
+# Format:
+#   "Agent Name":
+#     taskQueue: "queue-name"      # Temporal task queue name
+#     workflowType: "WorkflowType"  # Temporal workflow type
+#
+# Best Practices (see docs/gateway-routing-conventions.md):
+# - Task Queue: use lowercase-hyphenated-name + "-tasks"
+# - Workflow Type: use category-based workflows (LLMAgentWorkflow)
+
+version: "1.0"
+
+routing:
+  # Echo agent (for testing)
+  "echo-agent":
+    taskQueue: "echo-agent-tasks"
+    workflowType: "EchoTaskWorkflow"
+  
+  # Example custom agent (customize as needed)
+  "custom-agent":
+    taskQueue: "custom-agent-tasks"
+    workflowType: "LLMAgentWorkflow"
+
+# Workflow type categories (for documentation)
+workflowCategories:
+  LLMAgentWorkflow:
+    description: "For agents that use LLM for reasoning and generation"
+    examples: ["Custom Agent", "LLM-based Agent"]
+  

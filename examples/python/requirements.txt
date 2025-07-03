@@ -1,0 +1,9 @@
+# Dependencies for Python examples
+requests
+
+# Google A2A SDK integration test dependencies
+httpx
+a2a-sdk
+
+# Optional: For more advanced examples
+# pydantic>=2.0.0

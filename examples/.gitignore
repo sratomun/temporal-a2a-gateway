@@ -1,0 +1,8 @@
+# Environment variables containing secrets
+.env
+.env.local
+.env.production
+
+# Docker volumes and logs
+*.log
+docker-compose.override.yml

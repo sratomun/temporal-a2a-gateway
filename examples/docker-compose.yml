@@ -1,0 +1,153 @@
+
+services:
+  # PostgreSQL database for Temporal
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: temporal
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - a2a-network
+
+  # Temporal server
+  temporal:
+    image: temporalio/auto-setup:1.24.2
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PWD=postgres
+      - POSTGRES_SEEDS=postgres
+      - POSTGRES_DB=temporal
+      - ENABLE_ES=false
+      - TEMPORAL_CLI_ADDRESS=temporal:7233
+    ports:
+      - "7233:7233"
+      - "8233:8233"  # Web UI
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "netstat -ln | grep :7233 || ss -ln | grep :7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - a2a-network
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - a2a-network
+
+  # Qdrant Vector Database for Agent Registry
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - a2a-network
+
+  # Agent Registry Service
+  agent-registry:
+    build: ../agent-registry
+    environment:
+      - QDRANT_URL=http://qdrant:6334
+      - PORT=8001
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-openai}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-ada-002}
+      - EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS:-1536}
+      - EMBEDDING_TIMEOUT=${EMBEDDING_TIMEOUT:-30}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "8001:8001"
+    depends_on:
+      - qdrant
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - a2a-network
+
+  # A2A Gateway
+  a2a-gateway:
+    build: ../gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - TEMPORAL_HOST=temporal
+      - TEMPORAL_PORT=7233
+      - TEMPORAL_NAMESPACE=default
+      - A2A_PORT=8080
+      - REDIS_URL=redis://redis:6379
+      - AGENT_REGISTRY_URL=http://agent-registry:8001
+      - LOG_LEVEL=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      agent-registry:
+        condition: service_started
+    networks:
+      - a2a-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Echo Agent Worker
+  echo-worker:
+    build: ../workers
+    environment:
+      - TEMPORAL_HOST=temporal
+      - TEMPORAL_PORT=7233
+      - TEMPORAL_NAMESPACE=default
+      - TASK_QUEUE=echo-agent-tasks
+    depends_on:
+      temporal:
+        condition: service_healthy
+      a2a-gateway:
+        condition: service_healthy
+    networks:
+      - a2a-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis-data:
+  qdrant-data:
+
+networks:
+  a2a-network:
+    driver: bridge

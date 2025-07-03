@@ -1,0 +1,15 @@
+{
+        "name": "echo-agent",
+        "description": "Simple echo agent for testing A2A protocol integration",
+        "version": "1.0.0",
+        "url": "http://localhost:8080/agents/echo-agent",
+        "capabilities": {
+            "streaming": False,
+            "pushNotifications": False,
+            "stateTransitionHistory": True
+        },
+        "skills": [],
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "securitySchemes": {}
+}
