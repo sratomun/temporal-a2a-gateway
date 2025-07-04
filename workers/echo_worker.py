@@ -111,7 +111,7 @@ class WorkflowProgressSignal:
 async def echo_activity(message_content: str) -> str:
     return f"Echo: {message_content}"
 
-# Activities for push notifications removed - using update handlers instead
+# Workflow signal-based progressive streaming
 
 
 @workflow.defn
@@ -125,14 +125,6 @@ class EchoTaskWorkflow:
         """Query handler for gateway to retrieve progress signals"""
         return self.progress_signals
     
-    @workflow.update
-    async def get_progress_update(self) -> Dict[str, Any]:
-        """Update handler that returns the latest progress when called by gateway"""
-        if self.progress_signals:
-            # For streaming, we need to return the full current state
-            # The gateway will handle deduplication
-            return self.progress_signals[-1]
-        return {"status": "pending", "progress": 0.0}
     
     async def add_progress_signal(self, status: str, progress: float = 0.0, 
                           result: Any = None, error: str = ""):
@@ -152,7 +144,7 @@ class EchoTaskWorkflow:
         self.progress_signals.append(signal_dict)
         logger.info(f"📡 Added progress signal for task {task_id}: {status}")
         
-        # No need to push - gateway will pull via update handlers
+        # Progress signals stored for query access
     
     @workflow.run
     async def run(self, task_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -226,7 +218,6 @@ class StreamingEchoTaskWorkflow:
     def __init__(self):
         # Internal progress signals storage for query-based streaming
         self.progress_signals: List[Dict[str, Any]] = []
-        # Update handlers for real-time streaming
         
     async def _signal_gateway(self, gateway_workflow_id: str, status: str, 
                             progress: float = 0.0, artifact: Dict[str, Any] = None):
@@ -254,14 +245,6 @@ class StreamingEchoTaskWorkflow:
         """Query handler for gateway to retrieve progress signals"""
         return self.progress_signals
     
-    @workflow.update
-    async def get_progress_update(self) -> Dict[str, Any]:
-        """Update handler that returns the latest progress when called by gateway"""
-        if self.progress_signals:
-            # For streaming, we need to return the full current state
-            # The gateway will handle deduplication
-            return self.progress_signals[-1]
-        return {"status": "pending", "progress": 0.0}
     
     async def add_progress_signal(self, status: str, progress: float = 0.0, 
                           result: Any = None, error: str = ""):
@@ -281,7 +264,7 @@ class StreamingEchoTaskWorkflow:
         self.progress_signals.append(signal_dict)
         logger.info(f"📡 Added progress signal for task {task_id}: {status}")
         
-        # No need to push - gateway will pull via update handlers
+        # Progress signals stored for query access
     
     @workflow.run
     async def run(self, task_input: Dict[str, Any]) -> Dict[str, Any]:

@@ -70,10 +70,6 @@ type Gateway struct {
 	agentRegistryURL string
 	port           string
 	
-	// Real-time streaming channels
-	streamingChannels map[string]chan interface{} // taskID -> event channel
-	streamingMutex    sync.RWMutex
-	
 	// SSE channels for gateway workflows
 	sseChannels      map[string]chan interface{} // channelID -> event channel
 	sseChannelsMutex sync.RWMutex
@@ -319,11 +315,6 @@ type TaskArtifactUpdateEvent struct {
 	Timestamp string      `json:"timestamp"`
 }
 
-// Legacy SSE event structure (deprecated, will be removed)
-type SSEEvent struct {
-	Type string      `json:"type"`
-	Data interface{} `json:"data"`
-}
 
 type MonitoringOptions struct {
 	StreamChannel chan<- interface{} // A2A events for streaming
@@ -537,7 +528,6 @@ func NewGateway() (*Gateway, error) {
 		redisClient:    redisClient,
 		agentRegistryURL: agentRegistryURL,
 		port:           port,
-		streamingChannels: make(map[string]chan interface{}),
 		sseChannels:       make(map[string]chan interface{}),
 	}
 	
@@ -1450,13 +1440,11 @@ func (g *Gateway) handleGetTask(w http.ResponseWriter, req *JSONRPCRequest) {
 	g.sendDeprecatedResult(w, req, a2aTask, "a2a.getTask")
 }
 
-// Pure signal monitoring approach - supports both streaming and non-streaming
+// Workflow monitoring - only completion monitoring for non-streaming tasks
 func (g *Gateway) monitorWorkflow(taskID string, workflowRun client.WorkflowRun, opts MonitoringOptions) {
-	if opts.StreamChannel != nil {
-		// Signal-based streaming monitoring
-		g.monitorWithUpdates(taskID, workflowRun, opts.StreamChannel)
-	} else {
-		// Traditional completion monitoring (existing behavior)
+	// For streaming tasks, monitoring is handled by workflow signals
+	// For non-streaming tasks, monitor for completion
+	if opts.StreamChannel == nil {
 		g.monitorForCompletion(taskID, workflowRun)
 	}
 }
@@ -1487,181 +1475,6 @@ func (g *Gateway) monitorForCompletion(taskID string, workflowRun client.Workflo
 }
 
 // Update-based streaming monitoring for real-time updates
-func (g *Gateway) monitorWithUpdates(taskID string, workflowRun client.WorkflowRun, streamChan chan<- interface{}) {
-	go func() {
-		// Channel will be closed by the caller if needed, not here
-		ctx := context.Background()
-		
-		log.Printf("🔄 Starting UPDATE-BASED monitoring for task %s", taskID)
-		
-		// Continuously call update handler to get latest progress
-		ticker := time.NewTicker(100 * time.Millisecond) // Fast polling of update handler
-		defer ticker.Stop()
-		
-		lastStatus := ""
-		lastSentPosition := 0  // Track position in text stream for incremental sending
-		artifactID := fmt.Sprintf("artifact-%s", taskID[:8])
-		for {
-			select {
-			case <-ticker.C:
-				// Call the update handler to get latest progress
-				updateHandle, err := g.temporalClient.UpdateWorkflow(ctx, workflowRun.GetID(), workflowRun.GetRunID(), "get_progress_update")
-				if err != nil {
-					// Workflow might have completed
-					if err := workflowRun.Get(ctx, nil); err != nil {
-						log.Printf("❌ Workflow %s failed: %v", taskID, err)
-					} else {
-						log.Printf("✅ Workflow %s completed", taskID)
-					}
-					return
-				}
-				
-				// Get the update result
-				var progressData map[string]interface{}
-				if err := updateHandle.Get(ctx, &progressData); err == nil {
-					if status, ok := progressData["status"].(string); ok {
-						// Always process updates, not just on status change
-						// This is important for progressive streaming where content changes
-						
-						// Convert to WorkflowProgressSignal
-						signal := WorkflowProgressSignal{
-							TaskID:     taskID,
-							Status:     status,
-							Progress:   getFloatValue(progressData, "progress"),
-							Timestamp:  time.Now().Format(time.RFC3339),
-						}
-						if result, ok := progressData["result"]; ok {
-							signal.Result = result
-						}
-						if errorStr, ok := progressData["error"].(string); ok {
-							signal.Error = errorStr
-						}
-						
-						// Send status update if changed
-						contextID := fmt.Sprintf("ctx-%s", taskID[:8])
-						if status != lastStatus {
-							statusEvent := TaskStatusUpdateEvent{
-								TaskID:    taskID,
-								ContextID: contextID,
-								Kind:      "status-update",
-								Status: map[string]interface{}{
-									"state":     status,
-									"timestamp": time.Now().Format(time.RFC3339),
-								},
-								Final: status == "completed" || status == "failed",
-							}
-							streamChan <- statusEvent
-							lastStatus = status
-						}
-						
-						// Handle progressive artifact streaming
-						if signal.Result != nil && status == "working" {
-							if resultMap, ok := signal.Result.(map[string]interface{}); ok {
-								if artifactsArray, ok := resultMap["artifacts"].([]interface{}); ok && len(artifactsArray) > 0 {
-									if firstArtifact, ok := artifactsArray[0].(map[string]interface{}); ok {
-										if fullContent, ok := firstArtifact["data"].(string); ok {
-											// Check if we have new content to send
-											contentLen := len(fullContent)
-											if contentLen > lastSentPosition {
-												// Extract only the new chunk
-												newChunk := fullContent[lastSentPosition:]
-												
-												// Create incremental artifact update
-												artifactEvent := TaskArtifactUpdateEvent{
-													TaskID:    taskID,
-													ContextID: contextID,
-													Kind:      "artifact-update",
-													Artifact: map[string]interface{}{
-														"artifactId": artifactID,
-														"name":       "Echo Response",
-														"parts": []map[string]interface{}{
-															{
-																"kind": "text",
-																"text": newChunk, // Only new content
-															},
-														},
-													},
-													Append:    lastSentPosition > 0, // false for first chunk, true for subsequent
-													LastChunk: false, // Will be set to true when status is completed
-													Timestamp: newISO8601Timestamp(),
-												}
-												streamChan <- artifactEvent
-												
-												// Update position tracker
-												lastSentPosition = contentLen
-												log.Printf("📤 Sent progressive chunk: %q (position %d)", newChunk, lastSentPosition)
-											}
-										}
-									}
-								}
-							}
-						}
-						
-						// Send final artifact chunk when completed
-						if status == "completed" && signal.Result != nil {
-							if resultMap, ok := signal.Result.(map[string]interface{}); ok {
-								if artifactsArray, ok := resultMap["artifacts"].([]interface{}); ok && len(artifactsArray) > 0 {
-									if firstArtifact, ok := artifactsArray[0].(map[string]interface{}); ok {
-										if fullContent, ok := firstArtifact["data"].(string); ok {
-											// Send any remaining content with lastChunk: true
-											if len(fullContent) > lastSentPosition {
-												finalChunk := fullContent[lastSentPosition:]
-												artifactEvent := TaskArtifactUpdateEvent{
-													TaskID:    taskID,
-													ContextID: contextID,
-													Kind:      "artifact-update",
-													Artifact: map[string]interface{}{
-														"artifactId": artifactID,
-														"name":       "Echo Response",
-														"parts": []map[string]interface{}{
-															{
-																"kind": "text",
-																"text": finalChunk,
-															},
-														},
-													},
-													Append:    true,
-													LastChunk: true, // Mark as final chunk
-													Timestamp: newISO8601Timestamp(),
-												}
-												streamChan <- artifactEvent
-											} else if lastSentPosition > 0 {
-												// Send empty final chunk just to mark completion
-												artifactEvent := TaskArtifactUpdateEvent{
-													TaskID:    taskID,
-													ContextID: contextID,
-													Kind:      "artifact-update",
-													Artifact: map[string]interface{}{
-														"artifactId": artifactID,
-														"name":       "Echo Response",
-														"parts": []map[string]interface{}{
-															{
-																"kind": "text",
-																"text": "", // Empty final chunk
-															},
-														},
-													},
-													Append:    true,
-													LastChunk: true, // Mark as final chunk
-													Timestamp: newISO8601Timestamp(),
-												}
-												streamChan <- artifactEvent
-											}
-										}
-									}
-								}
-							}
-						}
-						
-						if status == "completed" || status == "failed" {
-							return
-						}
-					}
-				}
-			}
-		}
-	}()
-}
 
 // Helper functions for safe type conversion
 func getString(m map[string]interface{}, key string) string {
@@ -2177,7 +1990,7 @@ func (g *Gateway) handleMessageStream(w http.ResponseWriter, req *JSONRPCRequest
 		
 		log.Printf("✅ Started streaming workflow %s on queue %s (ID: %s)", taskID, taskQueue, workflowRun.GetID())
 		
-		// No callback registration needed - using Temporal Update handlers
+		// Streaming handled by workflow signals
 		
 		// No need to store streaming channels - using workflow-to-workflow signals
 		
@@ -2650,8 +2463,7 @@ func (g *Gateway) Start() error {
 	r.HandleFunc("/errors", g.handleErrorCodes).Methods("GET")
 	r.Handle("/metrics", CreateMetricsHandler()).Methods("GET")
 	
-	// Temporal workflow progress webhook for real-time streaming
-	// Webhook endpoint removed - using Temporal Update handlers instead
+	// A2A v0.2.5 compliant streaming via workflow signals
 	
 	// A2A v0.2.5 Compliant Agent-Specific Virtual Endpoints
 	// Single route pattern that extracts agentId from URL: /{agentId}
@@ -3180,7 +2992,7 @@ func (g *Gateway) handleDirectStreaming(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// Webhook handler removed - using Temporal Update handlers instead
+// Streaming is now handled by workflow-to-workflow signals
 
 func main() {
 	gateway, err := NewGateway()
