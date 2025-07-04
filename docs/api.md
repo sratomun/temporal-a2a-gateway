@@ -318,15 +318,18 @@ interface StreamConfig {
 }
 ```
 
-**Response:** SSE stream with real-time task progress events
+**Response:** SSE stream with A2A v0.2.5 compliant events
 
-**SSE Event Types:**
-- `task.created`: Task started execution
-- `task.status`: Status update during execution  
-- `task.progress`: Partial results or progress updates
-- `task.completed`: Task finished successfully
-- `task.error`: Task failed with error
-- `heartbeat`: Keep-alive signal
+**A2A v0.2.5 Streaming Events:**
+- `TaskStatusUpdateEvent`: Task status transitions (✅ **IMPLEMENTED**)
+  - Real-time status updates: submitted → working → completed
+  - Includes `final` flag for terminal states
+- `TaskArtifactUpdateEvent`: Real-time artifact streaming (🚧 **SPRINT 3**)
+  - Planned: Progressive content building and word-by-word streaming
+  - Future: ChatGPT-like real-time response generation
+
+**Current Streaming Experience:**
+Users receive real-time task status updates through the lifecycle. Artifact streaming for content generation is planned for Sprint 3 enhancement.
 
 ## Legacy Methods (Deprecated)
 

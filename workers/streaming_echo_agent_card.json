@@ -1,0 +1,20 @@
+{
+        "name": "streaming-echo-agent",
+        "description": "Progressive streaming echo agent demonstrating A2A v0.2.5 real-time artifact streaming",
+        "version": "1.0.0",
+        "url": "http://localhost:8080/agents/streaming-echo-agent",
+        "capabilities": {
+            "streaming": true,
+            "pushNotifications": false,
+            "stateTransitionHistory": true
+        },
+        "skills": [
+            {
+                "name": "progressive_echo",
+                "description": "Echoes the input message with progressive artifact streaming (word-by-word or chunk-by-chunk)"
+            }
+        ],
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "securitySchemes": {}
+}

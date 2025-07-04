@@ -108,6 +108,8 @@ services:
       - REDIS_URL=redis://redis:6379
       - AGENT_REGISTRY_URL=http://agent-registry:8001
       - LOG_LEVEL=info
+    volumes:
+      - ../gateway/config:/root/config:ro  # Mount config directory for dynamic routing
     depends_on:
       postgres:
         condition: service_healthy

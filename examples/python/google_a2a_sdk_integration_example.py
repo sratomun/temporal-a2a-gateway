@@ -105,8 +105,8 @@ async def test_google_a2a_sdk_integration():
             print("❌ No response received")
             return False
             
-        # ✅ A2A v0.2.5 COMPLIANT: Manual parsing is specification-required
-        # The SDK provides transport; clients handle JSON-RPC result extraction
+        # ✅ A2A v0.2.5 COMPLIANT: JSON-RPC result extraction with SDK types
+        # SDK provides transport; clients can use both JSON parsing and SDK types
         task_data = task_response.model_dump()
         task_id = task_data.get('result', {}).get('id')
         
@@ -190,7 +190,7 @@ def main():
         if success:
             print("🎉 Google A2A SDK Integration Test PASSED")
             print("✅ Gateway is A2A v0.2.5 compliant")
-            print("✅ Using Google A2A SDK types exclusively")
+            print("✅ Using Google A2A SDK types for structured access")
             print("✅ TaskStatus and Task objects working correctly")
         else:
             print("❌ Google A2A SDK Integration Test FAILED")

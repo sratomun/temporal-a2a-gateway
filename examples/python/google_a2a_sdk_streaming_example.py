@@ -89,7 +89,7 @@ async def test_google_a2a_sdk_streaming():
         return False
     
     gateway_url = "http://localhost:8080"
-    agent_id = "echo-agent"
+    agent_id = "streaming-echo-agent"  # Use streaming echo agent for progressive artifacts
     
     # Create AgentCard with streaming capability
     print("\n1️⃣ Creating streaming-capable agent card...")

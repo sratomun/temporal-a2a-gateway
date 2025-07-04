@@ -513,18 +513,44 @@ func main() {
 | `bufferSize` | integer | 1024 | Stream buffer size in bytes |
 | `timeout` | integer | 300 | Stream timeout in seconds |
 
-### Event Types Reference
+### A2A v0.2.5 Streaming Events
 
-| Event | Description | Data Format |
-|-------|-------------|-------------|
-| `task.started` | Task execution began | `{taskId, status, timestamp}` |
-| `task.progress` | Progress update | `{taskId, progress, message, timestamp}` |
-| `message.partial` | Partial response chunk | `{taskId, messageId, partialText, timestamp}` |
-| `task.completed` | Task finished successfully | `{taskId, status, result, timestamp}` |
-| `task.failed` | Task failed with error | `{taskId, status, error, timestamp}` |
-| `task.canceled` | Task was canceled | `{taskId, status, timestamp}` |
-| `heartbeat` | Keep-alive signal | `{timestamp}` |
-| `error` | Stream or task error | `{code, message, taskId?, timestamp}` |
+**Current Implementation Status:**
+
+| Event Type | Status | Description |
+|------------|---------|-------------|
+| `TaskStatusUpdateEvent` | ✅ **IMPLEMENTED** | Task status transitions (submitted → working → completed) |
+| `TaskArtifactUpdateEvent` | 🚧 **SPRINT 3** | Real-time artifact streaming (planned enhancement) |
+
+**TaskStatusUpdateEvent Structure (A2A v0.2.5 Compliant):**
+```json
+{
+  "taskId": "string",
+  "contextId": "string", 
+  "kind": "status-update",
+  "status": {
+    "state": "working|completed|failed|canceled",
+    "timestamp": "2025-07-04T09:00:00.000Z"
+  },
+  "final": false  // true for terminal status
+}
+```
+
+**Planned TaskArtifactUpdateEvent (Sprint 3):**
+```json
+{
+  "taskId": "string",
+  "contextId": "string",
+  "kind": "artifact-update", 
+  "artifact": {
+    "artifactId": "string",
+    "name": "string",
+    "parts": [...]
+  },
+  "append": false,     // true for progressive building
+  "lastChunk": false   // true for final artifact
+}
+```
 
 ## Technical Implementation
 

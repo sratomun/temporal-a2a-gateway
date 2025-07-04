@@ -13,10 +13,15 @@
 version: "1.0"
 
 routing:
-  # Echo agent (for testing)
+  # Basic echo agent (non-streaming, standard A2A task completion)
   "echo-agent":
     taskQueue: "echo-agent-tasks"
     workflowType: "EchoTaskWorkflow"
+  
+  # Streaming echo agent (progressive artifact streaming capabilities)
+  "streaming-echo-agent":
+    taskQueue: "streaming-echo-agent-tasks"
+    workflowType: "StreamingEchoTaskWorkflow"
   
   # Example custom agent (customize as needed)
   "custom-agent":
