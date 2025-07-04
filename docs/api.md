@@ -270,11 +270,63 @@ Cancels a running task according to A2A specification.
 }
 ```
 
-### message/stream (Planned)
+### message/stream
 
-Real-time task updates via Server-Sent Events (SSE).
+Real-time task updates via Server-Sent Events (SSE) using Temporal workflow signals.
 
-**Note:** SSE streaming support is planned for future implementation to provide real-time task progress updates.
+**Endpoint:** `/agents/{agentId}/a2a`
+
+**Method:** `message/stream`
+
+**Implementation:** Pure Temporal signals with 100ms query intervals for optimal performance.
+
+**Parameters:**
+- `message` (Message object, required): Message to send to the agent
+- `streamConfig` (object, optional): Streaming configuration options
+
+**Stream Configuration:**
+```typescript
+interface StreamConfig {
+  heartbeat?: number;     // Heartbeat interval in seconds (default: 30)
+  bufferSize?: number;    // Stream buffer size (default: 1024)
+  timeout?: number;       // Stream timeout in seconds (default: 300)
+}
+```
+
+**Example Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "message/stream",
+  "params": {
+    "message": {
+      "messageId": "stream-msg-001",
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Generate a response with real-time progress updates"
+        }
+      ]
+    },
+    "streamConfig": {
+      "heartbeat": 30,
+      "bufferSize": 1024
+    }
+  },
+  "id": "stream-001"
+}
+```
+
+**Response:** SSE stream with real-time task progress events
+
+**SSE Event Types:**
+- `task.created`: Task started execution
+- `task.status`: Status update during execution  
+- `task.progress`: Partial results or progress updates
+- `task.completed`: Task finished successfully
+- `task.error`: Task failed with error
+- `heartbeat`: Keep-alive signal
 
 ## Legacy Methods (Deprecated)
 
@@ -320,7 +372,7 @@ Real-time task updates via Server-Sent Events (SSE).
 
 Tasks progress through states as defined in A2A Protocol v0.2.5:
 
-- **`pending`**: Task has been received and queued (NEW in v0.4.1)
+- **`submitted`**: Task has been received and queued
 - **`working`**: Task is actively being processed  
 - **`input_required`**: Task needs additional input from user (planned)
 - **`completed`**: Task finished successfully
@@ -331,8 +383,10 @@ Tasks progress through states as defined in A2A Protocol v0.2.5:
 
 ### State Transitions
 ```
-pending → working → {completed|failed|canceled}
+submitted → working → {completed|failed|canceled}
 ```
+
+**Streaming Updates**: Real-time state transitions are available via `message/stream` endpoint using Temporal workflow signals for immediate notification of status changes.
 
 ## Agent Card Support
 
@@ -343,15 +397,16 @@ Agent Cards describe agent capabilities and metadata. Currently supported agents
 {
   "id": "echo-agent",
   "name": "Echo Agent",
-  "description": "Simple echo functionality for A2A protocol testing",
-  "version": "1.0.0",
+  "description": "Enhanced echo agent with real-time streaming capabilities",
+  "version": "2.0.0",
   "capabilities": {
-    "streaming": false,
+    "streaming": true,
+    "progressiveArtifacts": true,
     "pushNotifications": false,
     "stateTransitionHistory": true
   },
   "inputModes": ["text"],
-  "outputModes": ["text"]
+  "outputModes": ["text", "stream"]
 }
 ```
 
@@ -360,7 +415,11 @@ Additional agents can be configured via `agent-routing.yaml` configuration file 
 
 ## Google A2A SDK Integration
 
-This gateway is fully compatible with the Google A2A SDK:
+This gateway is fully compatible with the Google A2A SDK and demonstrates complete A2A v0.2.5 specification compliance. 
+
+> **📖 Reference Implementation**: See [SDK Integration Guide](./sdk-integration.md) for detailed A2A v0.2.5 client patterns and specification compliance.
+
+The integration follows the A2A protocol's JSON-first design philosophy for maximum compatibility and flexibility.
 
 ```python
 import asyncio
@@ -504,12 +563,11 @@ OpenTelemetry metrics in Prometheus format for A2A protocol monitoring.
 - Error handling per specification
 
 🚧 **Planned A2A Features:**
-- Server-Sent Events (SSE) streaming
-- Push notification configuration
 - Advanced authentication schemes
-- Agent capability negotiation
+- Agent capability negotiation  
 - File and data message parts
-- Artifact management
+- Enhanced artifact management
+- Push notification configuration
 
 ## Versioning
 

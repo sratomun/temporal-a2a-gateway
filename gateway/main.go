@@ -264,7 +264,8 @@ type A2ATask struct {
 	Kind      string                 `json:"kind"`                // A2A v0.2.5 required field
 	AgentID   string                 `json:"agentId"`
 	Input     interface{}            `json:"input"`
-	Result    interface{}            `json:"result,omitempty"`
+	Result    interface{}            `json:"result,omitempty"`   // Deprecated: use artifacts instead
+	Artifacts interface{}            `json:"artifacts,omitempty"` // A2A v0.2.5 compliant field
 	Error     *string                `json:"error,omitempty"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 	CreatedAt string                 `json:"createdAt"`
@@ -274,6 +275,44 @@ type A2ATask struct {
 type StoredTask struct {
 	A2ATask                           // Embedded A2A compliant task
 	WorkflowID string `json:"workflowId"` // Internal Temporal workflow ID
+}
+
+// Sprint 2: Pure Temporal Signals Infrastructure
+type WorkflowProgressSignal struct {
+	TaskID    string      `json:"taskId"`
+	Status    string      `json:"status"`
+	Progress  float64     `json:"progress,omitempty"`
+	Result    interface{} `json:"result,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	Timestamp string      `json:"timestamp"`
+}
+
+// A2A v0.2.5 compliant streaming event types
+type TaskStatusUpdateEvent struct {
+	TaskID    string                 `json:"taskId"`
+	ContextID string                 `json:"contextId"`
+	Kind      string                 `json:"kind"`        // "status-update"
+	Status    map[string]interface{} `json:"status"`
+	Final     bool                   `json:"final"`
+}
+
+type TaskArtifactUpdateEvent struct {
+	TaskID    string      `json:"taskId"`
+	ContextID string      `json:"contextId"`
+	Kind      string      `json:"kind"`        // "artifact-update"
+	Artifact  interface{} `json:"artifact"`
+	Append    bool        `json:"append"`
+	LastChunk bool        `json:"lastChunk"`
+}
+
+// Legacy SSE event structure (deprecated, will be removed)
+type SSEEvent struct {
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
+}
+
+type MonitoringOptions struct {
+	StreamChannel chan<- interface{} // A2A events for streaming
 }
 
 // Agent routing configuration structures
@@ -700,6 +739,11 @@ func (g *Gateway) getTaskFromRedis(taskID string) (*StoredTask, error) {
 		json.Unmarshal([]byte(data["result"]), &task.A2ATask.Result)
 	}
 	
+	// A2A v0.2.5 compliant artifacts field
+	if data["artifacts"] != "" {
+		json.Unmarshal([]byte(data["artifacts"]), &task.A2ATask.Artifacts)
+	}
+	
 	if data["metadata"] != "" {
 		json.Unmarshal([]byte(data["metadata"]), &task.A2ATask.Metadata)
 		
@@ -741,6 +785,20 @@ func (g *Gateway) updateTaskStatusInRedis(taskID, status string, result interfac
 	
 	var err error
 	if result != nil {
+		// Handle A2A v0.2.5 artifacts structure
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			if artifacts, hasArtifacts := resultMap["artifacts"]; hasArtifacts {
+				var artifactsJSON []byte
+				artifactsJSON, err = json.Marshal(artifacts)
+				if err != nil {
+					log.Printf("❌ Failed to marshal task artifacts: %v", err)
+					return fmt.Errorf("failed to marshal task artifacts: %w", err)
+				}
+				updates["artifacts"] = string(artifactsJSON)
+			}
+		}
+		
+		// Also store raw result for backward compatibility
 		var resultJSON []byte
 		resultJSON, err = json.Marshal(result)
 		if err != nil {
@@ -949,6 +1007,8 @@ func (g *Gateway) handleTasks(w http.ResponseWriter, r *http.Request) {
 	// Standard A2A Protocol Methods (Required)
 	case "message/send":
 		g.handleA2AMessageSend(w, &req)
+	case "message/stream":
+		g.handleMessageStream(w, &req)
 	case "tasks/get":
 		g.handleA2ATasksGet(w, &req)
 	case "tasks/cancel":
@@ -1062,7 +1122,7 @@ func (g *Gateway) handleCancelTask(w http.ResponseWriter, req *JSONRPCRequest) {
 
 	g.sendDeprecatedResult(w, req, map[string]interface{}{
 		"status": "canceled",
-	})
+	}, "a2a.cancelTask")
 }
 
 func (g *Gateway) handleRegisterAgent(w http.ResponseWriter, req *JSONRPCRequest) {
@@ -1306,7 +1366,7 @@ func (g *Gateway) handleCreateTask(w http.ResponseWriter, req *JSONRPCRequest) {
 	log.Printf("✅ Started workflow %s on queue %s", taskID, taskQueue)
 
 	// Start background goroutine to monitor workflow completion
-	go g.monitorWorkflow(taskID, workflowRun)
+	go g.monitorWorkflow(taskID, workflowRun, MonitoringOptions{})
 
 	agentName := params.AgentID
 	if agentName == "echo-agent" {
@@ -1321,7 +1381,7 @@ func (g *Gateway) handleCreateTask(w http.ResponseWriter, req *JSONRPCRequest) {
 			Name: agentName,
 		},
 		Created: taskData.A2ATask.CreatedAt,
-	})
+	}, "a2a.createTask")
 }
 
 func (g *Gateway) handleGetTask(w http.ResponseWriter, req *JSONRPCRequest) {
@@ -1358,10 +1418,22 @@ func (g *Gateway) handleGetTask(w http.ResponseWriter, req *JSONRPCRequest) {
 	// Return the embedded A2A task
 	a2aTask := g.getA2ATask(storedTask)
 
-	g.sendDeprecatedResult(w, req, a2aTask)
+	g.sendDeprecatedResult(w, req, a2aTask, "a2a.getTask")
 }
 
-func (g *Gateway) monitorWorkflow(taskID string, workflowRun client.WorkflowRun) {
+// Pure signal monitoring approach - supports both streaming and non-streaming
+func (g *Gateway) monitorWorkflow(taskID string, workflowRun client.WorkflowRun, opts MonitoringOptions) {
+	if opts.StreamChannel != nil {
+		// Signal-based streaming monitoring
+		g.monitorWithSignals(taskID, workflowRun, opts.StreamChannel)
+	} else {
+		// Traditional completion monitoring (existing behavior)
+		g.monitorForCompletion(taskID, workflowRun)
+	}
+}
+
+// Traditional completion monitoring (preserves existing behavior)
+func (g *Gateway) monitorForCompletion(taskID string, workflowRun client.WorkflowRun) {
 	ctx := context.Background()
 	
 	// Wait for workflow completion with timeout
@@ -1382,6 +1454,190 @@ func (g *Gateway) monitorWorkflow(taskID string, workflowRun client.WorkflowRun)
 		if updateErr != nil {
 			log.Printf("⚠️ Failed to update completed task status in Redis: %v", updateErr)
 		}
+	}
+}
+
+// Signal-based streaming monitoring for real-time updates
+func (g *Gateway) monitorWithSignals(taskID string, workflowRun client.WorkflowRun, streamChan chan<- interface{}) {
+	go func() {
+		defer close(streamChan)
+		ctx := context.Background()
+		lastSignalCount := 0
+		
+		log.Printf("🔄 Starting signal-based monitoring for task %s", taskID)
+		
+		for {
+			// Query workflow for new progress signals
+			var signals []WorkflowProgressSignal
+			queryValue, err := g.temporalClient.QueryWorkflow(ctx, workflowRun.GetID(), "", "get_progress_signals")
+			if err == nil {
+				err = queryValue.Get(&signals)
+			}
+			
+			var completedSignalSent bool
+			if err == nil && len(signals) > lastSignalCount {
+				// Send new signals as A2A compliant events
+				for i := lastSignalCount; i < len(signals); i++ {
+					contextID := fmt.Sprintf("ctx-%s", taskID[:8])
+					
+					// Send all events (status update and artifact update if available)
+					events := g.convertSignalToA2AEvent(signals[i], contextID)
+					log.Printf("🔍 Sending %d events for signal %s", len(events), signals[i].Status)
+					for j, event := range events {
+						streamChan <- event
+						if statusEvent, ok := event.(TaskStatusUpdateEvent); ok {
+							log.Printf("🔍 Sent status event %d: %s (final: %t)", j+1, statusEvent.Status["state"], statusEvent.Final)
+							if statusEvent.Final {
+								completedSignalSent = true
+							}
+						} else if artifactEvent, ok := event.(TaskArtifactUpdateEvent); ok {
+							log.Printf("🔍 Sent artifact event %d: lastChunk=%t", j+1, artifactEvent.LastChunk)
+						}
+					}
+					
+					g.updateTaskStatusFromSignal(taskID, signals[i])
+					
+					log.Printf("📡 Streamed A2A event for task %s: %s", taskID, signals[i].Status)
+				}
+				lastSignalCount = len(signals)
+			}
+			
+			// If we sent a completed signal with artifacts, we can exit
+			if completedSignalSent {
+				log.Printf("✅ Task %s streaming completed with artifacts", taskID)
+				close(streamChan)
+				return
+			}
+			
+			// Check workflow completion as fallback
+			if workflowRun.Get(ctx, nil) == nil {
+				// Workflow completed - do one final signal check before ending
+				var finalSignals []WorkflowProgressSignal
+				queryValue, err := g.temporalClient.QueryWorkflow(ctx, workflowRun.GetID(), "", "get_progress_signals")
+				if err == nil {
+					err = queryValue.Get(&finalSignals)
+				}
+				
+				if err == nil && len(finalSignals) > lastSignalCount {
+					// Send any remaining signals as A2A compliant events
+					for i := lastSignalCount; i < len(finalSignals); i++ {
+						contextID := fmt.Sprintf("ctx-%s", taskID[:8])
+						
+						// Send all final events (status update and artifact update if available)
+						events := g.convertSignalToA2AEvent(finalSignals[i], contextID)
+						for _, event := range events {
+							streamChan <- event
+						}
+						
+						g.updateTaskStatusFromSignal(taskID, finalSignals[i])
+						log.Printf("📡 Final A2A event for task %s: %s", taskID, finalSignals[i].Status)
+					}
+				}
+				
+				log.Printf("🏁 Workflow %s completed, ending stream", taskID)
+				return
+			}
+			
+			time.Sleep(100 * time.Millisecond) // 100ms query interval for real-time feel
+		}
+	}()
+}
+
+// Convert workflow progress signal to A2A v0.2.5 compliant event
+func (g *Gateway) convertSignalToA2AEvent(signal WorkflowProgressSignal, contextID string) []interface{} {
+	var events []interface{}
+	
+	switch signal.Status {
+	case "working":
+		events = append(events, TaskStatusUpdateEvent{
+			TaskID:    signal.TaskID,
+			ContextID: contextID,
+			Kind:      "status-update",
+			Status: map[string]interface{}{
+				"state":     signal.Status,
+				"timestamp": signal.Timestamp,
+			},
+			Final: false,
+		})
+	case "completed":
+		// Send status update first
+		statusEvent := TaskStatusUpdateEvent{
+			TaskID:    signal.TaskID,
+			ContextID: contextID,
+			Kind:      "status-update",
+			Status: map[string]interface{}{
+				"state":     signal.Status,
+				"timestamp": signal.Timestamp,
+			},
+			Final: true,
+		}
+		events = append(events, statusEvent)
+		
+		// Send artifact update if result contains artifacts
+		if signal.Result != nil {
+			artifactEvent := TaskArtifactUpdateEvent{
+				TaskID:    signal.TaskID,
+				ContextID: contextID,
+				Kind:      "artifact-update",
+				Artifact:  signal.Result,
+				Append:    false,
+				LastChunk: true,
+			}
+			events = append(events, artifactEvent)
+		}
+	case "failed":
+		events = append(events, TaskStatusUpdateEvent{
+			TaskID:    signal.TaskID,
+			ContextID: contextID,
+			Kind:      "status-update",
+			Status: map[string]interface{}{
+				"state":     signal.Status,
+				"timestamp": signal.Timestamp,
+			},
+			Final: true,
+		})
+	default:
+		events = append(events, TaskStatusUpdateEvent{
+			TaskID:    signal.TaskID,
+			ContextID: contextID,
+			Kind:      "status-update",
+			Status: map[string]interface{}{
+				"state":     "working",
+				"timestamp": signal.Timestamp,
+			},
+			Final: false,
+		})
+	}
+	
+	return events
+}
+
+// Create A2A v0.2.5 compliant artifact update event
+func (g *Gateway) createArtifactUpdateEvent(taskID, contextID string, artifact interface{}, isLast bool) TaskArtifactUpdateEvent {
+	return TaskArtifactUpdateEvent{
+		TaskID:    taskID,
+		ContextID: contextID,
+		Kind:      "artifact-update",
+		Artifact:  artifact,
+		Append:    false,    // For echo agent, replace entire artifact
+		LastChunk: isLast,
+	}
+}
+
+// Update task status in Redis from workflow signal
+func (g *Gateway) updateTaskStatusFromSignal(taskID string, signal WorkflowProgressSignal) {
+	var result interface{}
+	var errorMsg string
+	
+	if signal.Status == "completed" {
+		result = signal.Result
+	} else if signal.Status == "failed" {
+		errorMsg = signal.Error
+	}
+	
+	err := g.updateTaskStatusInRedis(taskID, signal.Status, result, errorMsg)
+	if err != nil {
+		log.Printf("⚠️ Failed to update task status from signal: %v", err)
 	}
 }
 
@@ -1467,8 +1723,19 @@ func (g *Gateway) handleA2AMessageSend(w http.ResponseWriter, req *JSONRPCReques
 	
 	// Create A2A-compliant task directly without delegation
 	ctx := context.Background()
-	taskQueue := fmt.Sprintf("%s-tasks", params.AgentID)
-	workflowType := fmt.Sprintf("%sWorkflow", params.AgentID)
+	
+	// Get workflow and task queue for agent from configuration
+	workflowType, ok := agentWorkflows[params.AgentID]
+	if !ok {
+		g.sendError(w, req, ErrorAgentNotFound, fmt.Sprintf("Unknown agent: %s", params.AgentID))
+		return
+	}
+
+	taskQueue, ok := agentTaskQueues[params.AgentID]
+	if !ok {
+		g.sendError(w, req, ErrorAgentNotFound, fmt.Sprintf("Unknown agent: %s", params.AgentID))
+		return
+	}
 	
 	// Temporal workflow options
 	workflowOptions := client.StartWorkflowOptions{
@@ -1527,12 +1794,331 @@ func (g *Gateway) handleA2AMessageSend(w http.ResponseWriter, req *JSONRPCReques
 	}
 	
 	// Start monitoring
-	go g.monitorWorkflow(taskID, workflowRun)
+	go g.monitorWorkflow(taskID, workflowRun, MonitoringOptions{})
 	
 	log.Printf("✅ A2A task %s created successfully", taskID)
 	
 	// Return A2A-compliant task response (not wrapped TaskResult)
 	g.sendResult(w, req, a2aTask)
+}
+
+// Sprint 2: A2A v0.2.5 message/stream endpoint with SSE
+func (g *Gateway) handleMessageStream(w http.ResponseWriter, req *JSONRPCRequest) {
+	var params MessageSendParams
+	paramBytes, err := json.Marshal(req.Params)
+	if err != nil {
+		g.sendError(w, req, ErrorInvalidParams, "Failed to marshal request params")
+		return
+	}
+	if err := json.Unmarshal(paramBytes, &params); err != nil {
+		g.sendError(w, req, ErrorInvalidParams, "Invalid params")
+		return
+	}
+
+	if params.AgentID == "" {
+		g.sendError(w, req, ErrorInvalidParams, "Missing required parameter: agentId")
+		return
+	}
+
+	log.Printf("🔄 A2A compliant message/stream for agent %s", params.AgentID)
+
+	// Check for Flusher support BEFORE setting SSE headers
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		log.Printf("❌ A2A streaming: ResponseWriter does not support flushing")
+		g.sendError(w, req, -32603, "Streaming not supported by server")
+		return
+	}
+	
+	// Set SSE headers AFTER Flusher check
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
+	
+	log.Printf("✅ A2A streaming: Flusher available, starting stream")
+	
+	// Create A2A event stream channel  
+	streamChan := make(chan interface{}, 10) // Buffer for 10 A2A events
+	
+	// Generate unique task ID
+	taskID := uuid.New().String()
+	contextID := fmt.Sprintf("ctx-%s", taskID[:8])
+	
+	log.Printf("📡 Starting A2A streaming for task %s", taskID)
+	
+	// Send initial A2A status update event
+	initialStatusEvent := TaskStatusUpdateEvent{
+		TaskID:    taskID,
+		ContextID: contextID,
+		Kind:      "status-update",
+		Status: map[string]interface{}{
+			"state":     "submitted",
+			"timestamp": newISO8601Timestamp(),
+		},
+		Final: false,
+	}
+	
+	// Start workflow with streaming monitoring
+	go func() {
+		// Create A2A-compliant task
+		ctx := context.Background()
+		
+		// Get workflow and task queue for agent from configuration
+		workflowType, ok := agentWorkflows[params.AgentID]
+		if !ok {
+			log.Printf("❌ Unknown agent: %s", params.AgentID)
+			// Send A2A error status event
+			errorEvent := TaskStatusUpdateEvent{
+				TaskID:    taskID,
+				ContextID: contextID,
+				Kind:      "status-update",
+				Status: map[string]interface{}{
+					"state":     "failed",
+					"timestamp": newISO8601Timestamp(),
+				},
+				Final: true,
+			}
+			streamChan <- errorEvent
+			close(streamChan)
+			return
+		}
+
+		taskQueue, ok := agentTaskQueues[params.AgentID]
+		if !ok {
+			log.Printf("❌ Unknown agent: %s", params.AgentID)
+			// Send A2A error status event
+			errorEvent := TaskStatusUpdateEvent{
+				TaskID:    taskID,
+				ContextID: contextID,
+				Kind:      "status-update",
+				Status: map[string]interface{}{
+					"state":     "failed",
+					"timestamp": newISO8601Timestamp(),
+				},
+				Final: true,
+			}
+			streamChan <- errorEvent
+			close(streamChan)
+			return
+		}
+		
+		// Temporal workflow options
+		workflowOptions := client.StartWorkflowOptions{
+			ID:        taskID,
+			TaskQueue: taskQueue,
+		}
+		
+		// Start workflow
+		workflowRun, err := g.temporalClient.ExecuteWorkflow(ctx, workflowOptions, workflowType, params.Message)
+		if err != nil {
+			log.Printf("❌ Failed to start workflow for streaming task %s: %v", taskID, err)
+			// Send A2A error status event
+			errorEvent := TaskStatusUpdateEvent{
+				TaskID:    taskID,
+				ContextID: contextID,
+				Kind:      "status-update",
+				Status: map[string]interface{}{
+					"state":     "failed",
+					"timestamp": newISO8601Timestamp(),
+				},
+				Final: true,
+			}
+			streamChan <- errorEvent
+			close(streamChan)
+			return
+		}
+		
+		log.Printf("✅ Started streaming workflow %s on queue %s", taskID, taskQueue)
+		
+		// Create A2A task for Redis storage
+		a2aTask := A2ATask{
+			ID:        taskID,
+			ContextID: taskID,
+			Status: TaskStatus{
+				State:     "submitted",
+				Timestamp: newISO8601Timestamp(),
+			},
+			Kind:      "task",
+			AgentID:   params.AgentID,
+			Input:     params.Message,
+			Metadata:  params.Metadata,
+			CreatedAt: newISO8601Timestamp(),
+		}
+		
+		// Store in Redis
+		storedTask := &StoredTask{A2ATask: a2aTask, WorkflowID: taskID}
+		err = g.storeTaskInRedis(storedTask)
+		if err != nil {
+			log.Printf("⚠️ Failed to store streaming task in Redis: %v", err)
+		}
+		
+		// Send initial status event
+		streamChan <- initialStatusEvent
+		
+		// Start signal-based monitoring with streaming
+		g.monitorWorkflow(taskID, workflowRun, MonitoringOptions{
+			StreamChannel: streamChan,
+		})
+	}()
+	
+	// Stream A2A events to client (Flusher already checked above)
+	
+	for event := range streamChan {
+		eventData, err := json.Marshal(event)
+		if err != nil {
+			log.Printf("⚠️ Failed to marshal A2A event: %v", err)
+			continue
+		}
+		
+		// A2A events are sent as plain SSE data without event type
+		fmt.Fprintf(w, "data: %s\n\n", eventData)
+		flusher.Flush()
+		
+		// Log event types
+		if statusEvent, ok := event.(TaskStatusUpdateEvent); ok {
+			log.Printf("📡 Sent A2A status event: %s (final: %t) for task %s", statusEvent.Status["state"], statusEvent.Final, taskID)
+		} else if artifactEvent, ok := event.(TaskArtifactUpdateEvent); ok {
+			log.Printf("📡 Sent A2A artifact event (lastChunk: %t) for task %s", artifactEvent.LastChunk, taskID)
+		}
+		
+		// Note: Let the monitoring goroutine close the channel when complete
+		// This ensures all events are sent before the stream ends
+	}
+	
+	log.Printf("🏁 A2A stream ended for task %s", taskID)
+}
+
+// A2A v0.2.5 compliant agent-specific virtual endpoint handler
+func (g *Gateway) handleAgentSpecificEndpoint(w http.ResponseWriter, r *http.Request) {
+	// Extract agentId from URL path
+	vars := mux.Vars(r)
+	agentID := vars["agentId"]
+	
+	if agentID == "" {
+		http.Error(w, "Agent ID not found in URL", http.StatusBadRequest)
+		return
+	}
+
+	// Validate that agent exists
+	if _, exists := agentTaskQueues[agentID]; !exists {
+		http.Error(w, fmt.Sprintf("Agent not found: %s", agentID), http.StatusNotFound)
+		return
+	}
+
+	var req JSONRPCRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		g.sendError(w, &req, ErrorParseError, "Parse error")
+		return
+	}
+
+	// JSON-RPC 2.0 validation
+	if req.Jsonrpc != "2.0" {
+		g.sendError(w, &req, ErrorInvalidRequest, "Invalid Request - missing or invalid jsonrpc field")
+		return
+	}
+
+	if req.Method == "" {
+		g.sendError(w, &req, ErrorInvalidRequest, "Invalid Request - missing method field")
+		return
+	}
+
+	log.Printf("📨 A2A v0.2.5 compliant request for agent %s: %s", agentID, req.Method)
+
+	// Handle methods for specific agent without agentId parameter
+	switch req.Method {
+	case "message/send":
+		g.handleAgentMessageSend(w, &req, agentID)
+	case "message/stream":
+		g.handleAgentMessageStream(w, &req, agentID)
+	case "tasks/get":
+		g.handleA2ATasksGet(w, &req)
+	case "tasks/cancel":
+		g.handleA2ATasksCancel(w, &req)
+	default:
+		g.sendError(w, &req, ErrorMethodNotFound, fmt.Sprintf("Method not found: %s", req.Method))
+	}
+}
+
+// A2A v0.2.5 compliant message/send handler (no agentId parameter required)
+func (g *Gateway) handleAgentMessageSend(w http.ResponseWriter, req *JSONRPCRequest, agentID string) {
+	// Parse params without expecting agentId (A2A v0.2.5 compliant)
+	type AgentMessageParams struct {
+		Message  interface{}            `json:"message"`
+		Metadata map[string]interface{} `json:"metadata,omitempty"`
+	}
+	
+	var params AgentMessageParams
+	paramBytes, err := json.Marshal(req.Params)
+	if err != nil {
+		g.sendError(w, req, ErrorInvalidParams, "Failed to marshal request params")
+		return
+	}
+	if err := json.Unmarshal(paramBytes, &params); err != nil {
+		g.sendError(w, req, ErrorInvalidParams, "Invalid params")
+		return
+	}
+
+	log.Printf("📨 A2A compliant message/send for agent %s", agentID)
+
+	// Create full params with agentID for internal processing
+	fullParams := MessageSendParams{
+		AgentID:  agentID,
+		Message:  params.Message,
+		Metadata: params.Metadata,
+	}
+	
+	// Create new request with full params for internal handling
+	internalReq := &JSONRPCRequest{
+		Jsonrpc: req.Jsonrpc,
+		Method:  req.Method,
+		Params:  fullParams,
+		ID:      req.ID,
+	}
+
+	// Delegate to existing A2A message send handler
+	g.handleA2AMessageSend(w, internalReq)
+}
+
+// A2A v0.2.5 compliant message/stream handler (no agentId parameter required)
+func (g *Gateway) handleAgentMessageStream(w http.ResponseWriter, req *JSONRPCRequest, agentID string) {
+	// Parse params without expecting agentId (A2A v0.2.5 compliant)
+	type AgentMessageParams struct {
+		Message  interface{}            `json:"message"`
+		Metadata map[string]interface{} `json:"metadata,omitempty"`
+	}
+	
+	var params AgentMessageParams
+	paramBytes, err := json.Marshal(req.Params)
+	if err != nil {
+		g.sendError(w, req, ErrorInvalidParams, "Failed to marshal request params")
+		return
+	}
+	if err := json.Unmarshal(paramBytes, &params); err != nil {
+		g.sendError(w, req, ErrorInvalidParams, "Invalid params")
+		return
+	}
+
+	log.Printf("🔄 A2A compliant message/stream for agent %s", agentID)
+
+	// Create full params with agentID for internal processing
+	fullParams := MessageSendParams{
+		AgentID:  agentID,
+		Message:  params.Message,
+		Metadata: params.Metadata,
+	}
+	
+	// Create new request with full params for internal handling
+	internalReq := &JSONRPCRequest{
+		Jsonrpc: req.Jsonrpc,
+		Method:  req.Method,
+		Params:  fullParams,
+		ID:      req.ID,
+	}
+
+	// Delegate to existing streaming handler
+	g.handleMessageStream(w, internalReq)
 }
 
 func (g *Gateway) handleA2ATasksGet(w http.ResponseWriter, req *JSONRPCRequest) {
@@ -1547,23 +2133,23 @@ func (g *Gateway) handleA2ATasksGet(w http.ResponseWriter, req *JSONRPCRequest) 
 		return
 	}
 
+	if params.ID == "" {
+		g.sendError(w, req, ErrorInvalidParams, "Missing id parameter")
+		return
+	}
+
 	log.Printf("📊 A2A tasks/get for task %s", params.ID)
 
-	// Convert to getTask format
-	getTaskParams := GetTaskParams{
-		ID: params.ID,
+	// Get task from Redis
+	storedTask, err := g.getTaskFromRedis(params.ID)
+	if err != nil {
+		g.sendError(w, req, ErrorTaskNotFound, fmt.Sprintf("Task not found: %s", params.ID))
+		return
 	}
 
-	// Create new request for getTask
-	getTaskReq := &JSONRPCRequest{
-		Jsonrpc: req.Jsonrpc,
-		Method:  "a2a.getTask",
-		Params:  getTaskParams,
-		ID:      req.ID,
-	}
-
-	// Delegate to existing getTask implementation
-	g.handleGetTask(w, getTaskReq)
+	// Return clean A2A Task object (A2A v0.2.5 compliant method)
+	a2aTask := g.getA2ATask(storedTask)
+	g.sendResult(w, req, a2aTask)
 }
 
 func (g *Gateway) handleA2ATasksCancel(w http.ResponseWriter, req *JSONRPCRequest) {
@@ -1578,23 +2164,31 @@ func (g *Gateway) handleA2ATasksCancel(w http.ResponseWriter, req *JSONRPCReques
 		return
 	}
 
+	if params.ID == "" {
+		g.sendError(w, req, ErrorInvalidParams, "Missing id parameter")
+		return
+	}
+
 	log.Printf("🚫 A2A tasks/cancel for task %s", params.ID)
 
-	// Convert to cancelTask format
-	cancelTaskParams := CancelTaskParams{
-		ID: params.ID,
+	// Cancel the workflow in Temporal
+	ctx := context.Background()
+	err = g.temporalClient.CancelWorkflow(ctx, params.ID, "")
+	if err != nil {
+		g.sendError(w, req, ErrorInternalError, fmt.Sprintf("Failed to cancel workflow: %v", err))
+		return
 	}
 
-	// Create new request for cancelTask
-	cancelTaskReq := &JSONRPCRequest{
-		Jsonrpc: req.Jsonrpc,
-		Method:  "a2a.cancelTask",
-		Params:  cancelTaskParams,
-		ID:      req.ID,
+	// Update task status in Redis
+	err = g.updateTaskStatusInRedis(params.ID, "canceled", nil, "")
+	if err != nil {
+		log.Printf("⚠️ Failed to update task status in Redis: %v", err)
 	}
 
-	// Delegate to existing cancelTask implementation
-	g.handleCancelTask(w, cancelTaskReq)
+	// Return clean A2A compliant response (A2A v0.2.5 compliant method)
+	g.sendResult(w, req, map[string]interface{}{
+		"status": "canceled",
+	})
 }
 
 func (g *Gateway) handleErrorCodes(w http.ResponseWriter, r *http.Request) {
@@ -1685,26 +2279,15 @@ func (g *Gateway) sendResult(w http.ResponseWriter, req *JSONRPCRequest, result 
 	json.NewEncoder(w).Encode(response)
 }
 
-// sendDeprecatedResult sends a JSON-RPC response with deprecation flag for legacy methods
-func (g *Gateway) sendDeprecatedResult(w http.ResponseWriter, req *JSONRPCRequest, result interface{}) {
-	// Wrap result with deprecation metadata
-	deprecatedResult := map[string]interface{}{
-		"deprecated": true,
-		"migration_info": map[string]interface{}{
-			"sunset_date": "2024-10-03T00:00:00Z",
-			"replacement_methods": map[string]string{
-				"a2a.createTask":  "message/send",
-				"a2a.getTask":     "tasks/get", 
-				"a2a.cancelTask":  "tasks/cancel",
-				"a2a.sendMessage": "message/send",
-			},
-		},
-		"result": result,
-	}
+// sendDeprecatedResult sends a JSON-RPC response with deprecation info in HTTP headers (A2A v0.2.5 compliant)
+func (g *Gateway) sendDeprecatedResult(w http.ResponseWriter, req *JSONRPCRequest, result interface{}, method string) {
+	// A2A v0.2.5 compliant: Add deprecation warnings to HTTP headers
+	addDeprecationWarnings(w, method)
 	
+	// A2A v0.2.5 compliant: Return clean result object (no nested result.result)
 	response := &JSONRPCResponse{
 		Jsonrpc: "2.0",
-		Result:  deprecatedResult,
+		Result:  result,
 		ID:      req.ID,
 	}
 
@@ -1754,6 +2337,13 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+// Preserve Flusher interface for streaming support
+func (rw *responseWriter) Flush() {
+	if flusher, ok := rw.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func (g *Gateway) sendA2AError(w http.ResponseWriter, req *JSONRPCRequest, a2aError *A2AError) {
 	response := &JSONRPCResponse{
 		Jsonrpc: "2.0",
@@ -1794,20 +2384,28 @@ func (g *Gateway) Start() error {
 	
 	r.HandleFunc("/health", g.handleHealth).Methods("GET")
 	r.HandleFunc("/errors", g.handleErrorCodes).Methods("GET")
-	r.HandleFunc("/a2a", g.handleTasks).Methods("POST")
 	r.Handle("/metrics", CreateMetricsHandler()).Methods("GET")
 	
-	// Google A2A SDK Compatibility Routes
+	// A2A v0.2.5 Compliant Agent-Specific Virtual Endpoints
+	// Single route pattern that extracts agentId from URL: /{agentId}
+	r.HandleFunc("/{agentId}", g.handleAgentSpecificEndpoint).Methods("POST")
+	log.Printf("✅ Registered A2A compliant virtual endpoints: /{agentId}")
+	
+	// Legacy endpoints (deprecated)
+	r.HandleFunc("/a2a", g.handleTasks).Methods("POST")
 	r.HandleFunc("/agents/{agentId}/.well-known/agent.json", g.handleAgentCard).Methods("GET")
 	r.HandleFunc("/agents/{agentId}/a2a", g.handleAgentProxy).Methods("POST")
 
 	// Start Redis cleanup scheduler
 	g.startRedisCleanupScheduler()
 
+	// A2A compliant streaming will be handled by existing /{agentId} endpoint
+
 	log.Printf("🚀 A2A Gateway (Go) listening on port %s", g.port)
 	log.Printf("📋 Phase 1 Week 2: Temporal integration ready")
 	log.Printf("🤖 Available agents: %v", getAgentIDs())
 	log.Printf("📊 Metrics available at /metrics")
+	log.Printf("🔄 A2A compliant streaming available at /{agentId}")
 
 	return http.ListenAndServe(":"+g.port, r)
 }
@@ -2157,7 +2755,7 @@ func (g *Gateway) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest, 
 	log.Printf("✅ Task %s stored successfully", taskID)
 	
 	// Start monitoring workflow to update task status when complete
-	go g.monitorWorkflow(taskID, we)
+	go g.monitorWorkflow(taskID, we, MonitoringOptions{})
 	
 	// Return A2A-compliant task response
 	response := &JSONRPCResponse{
@@ -2168,6 +2766,150 @@ func (g *Gateway) handleMessageSend(w http.ResponseWriter, req *JSONRPCRequest, 
 	
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// Direct streaming handler that bypasses middleware to fix http.Flusher issues
+func (g *Gateway) handleDirectStreaming(w http.ResponseWriter, r *http.Request) {
+	// Extract agent ID from path /stream/{agentId}
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) < 2 {
+		http.Error(w, "Invalid streaming path", http.StatusBadRequest)
+		return
+	}
+	agentID := pathParts[1]
+	
+	// Verify agent exists
+	if _, exists := agentTaskQueues[agentID]; !exists {
+		http.Error(w, fmt.Sprintf("Agent not found: %s", agentID), http.StatusNotFound)
+		return
+	}
+	
+	// Parse JSON-RPC request
+	var req JSONRPCRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON-RPC request", http.StatusBadRequest)
+		return
+	}
+	
+	// Only handle message/stream for direct streaming
+	if req.Method != "message/stream" {
+		http.Error(w, "Only message/stream supported on direct endpoint", http.StatusBadRequest)
+		return
+	}
+	
+	log.Printf("🔄 Direct streaming for agent %s", agentID)
+	
+	// Set SSE headers BEFORE checking Flusher
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Cache-Control")
+	
+	// Check for Flusher support with direct ResponseWriter
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		log.Printf("❌ Direct streaming: ResponseWriter does not support flushing")
+		http.Error(w, "Streaming not supported by server", http.StatusInternalServerError)
+		return
+	}
+	
+	log.Printf("✅ Direct streaming: Flusher available, starting stream")
+	
+	// Parse message params
+	var params MessageSendParams
+	if paramBytes, err := json.Marshal(req.Params); err == nil {
+		json.Unmarshal(paramBytes, &params)
+	}
+	
+	// Generate task ID and start workflow
+	taskID := uuid.New().String()
+	ctx := context.Background()
+	
+	workflowType := agentWorkflows[agentID]
+	taskQueue := agentTaskQueues[agentID]
+	
+	workflowOptions := client.StartWorkflowOptions{
+		ID:        taskID,
+		TaskQueue: taskQueue,
+	}
+	
+	workflowRun, err := g.temporalClient.ExecuteWorkflow(ctx, workflowOptions, workflowType, params.Message)
+	if err != nil {
+		log.Printf("❌ Failed to start workflow: %v", err)
+		fmt.Fprintf(w, "data: {\"error\": \"Failed to start workflow\"}\n\n")
+		flusher.Flush()
+		return
+	}
+	
+	log.Printf("✅ Started direct streaming workflow %s", taskID)
+	
+	// Send initial task created event
+	currentTime := newISO8601Timestamp()
+	initialEvent := map[string]interface{}{
+		"type": "task.created",
+		"taskId": taskID,
+		"task": map[string]interface{}{
+			"id": taskID,
+			"status": map[string]interface{}{
+				"state": "working",
+				"timestamp": currentTime,
+			},
+			"agentId": agentID,
+		},
+	}
+	
+	eventData, _ := json.Marshal(initialEvent)
+	fmt.Fprintf(w, "data: %s\n\n", eventData)
+	flusher.Flush()
+	
+	// Monitor workflow with direct signal polling
+	lastSignalCount := 0
+	for {
+		// Query workflow for progress signals
+		var signals []WorkflowProgressSignal
+		queryValue, err := g.temporalClient.QueryWorkflow(ctx, workflowRun.GetID(), "", "get_progress_signals")
+		if err == nil {
+			err = queryValue.Get(&signals)
+		}
+		
+		if err == nil && len(signals) > lastSignalCount {
+			// Send new signals as A2A compliant events
+			for i := lastSignalCount; i < len(signals); i++ {
+				contextID := fmt.Sprintf("ctx-%s", taskID[:8])
+				events := g.convertSignalToA2AEvent(signals[i], contextID)
+				for _, event := range events {
+					eventData, _ := json.Marshal(event)
+					fmt.Fprintf(w, "data: %s\n\n", eventData)
+					flusher.Flush()
+				}
+				
+				log.Printf("📡 Direct streamed signal for task %s: %s", taskID, signals[i].Status)
+				
+				if signals[i].Status == "completed" || signals[i].Status == "failed" {
+					log.Printf("✅ Direct streaming completed for task %s", taskID)
+					return
+				}
+			}
+			lastSignalCount = len(signals)
+		}
+		
+		// Check workflow completion
+		if workflowRun.Get(ctx, nil) == nil {
+			log.Printf("🏁 Direct streaming workflow %s completed", taskID)
+			return
+		}
+		
+		// Check if client disconnected
+		select {
+		case <-r.Context().Done():
+			log.Printf("🔌 Direct streaming client disconnected for task %s", taskID)
+			return
+		default:
+		}
+		
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func main() {
