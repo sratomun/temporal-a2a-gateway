@@ -13,7 +13,6 @@ from .workflows import (
     register_agent,
     _agent_task_activity, _agent_streaming_activity
 )
-from .workflow_generator import WorkflowGenerator
 
 logger = logging.getLogger(__name__)
 

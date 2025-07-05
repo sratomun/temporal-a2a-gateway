@@ -2,296 +2,170 @@
 
 > **Project Management**: See `project-management/` directory for comprehensive planning, milestones, and status tracking
 
-## 🎯 Current Status: Sprint 4 IN PROGRESS - Temporal A2A SDK Prototype
+## 🎯 Current Status: Sprint 5 PLANNING - Real-time Webhook Streaming
 
-**Project Status**: 🚀 **SDK IMPLEMENTATION** - Building developer-friendly SDK abstraction layer  
-**Current Week**: Week 5 of 12 (Sprint 4 - 70% complete)  
-**Technical Achievement**: Core SDK working, streaming fixed, 85% code reduction achieved
+**Project Status**: 🚀 **WEBHOOK STREAMING** - Implementing real-time HTTP push delivery  
+**Current Week**: Week 6 of 12 (Sprint 5 - 0% starting)  
+**Previous Achievement**: Sprint 4 SDK complete with 91% code reduction
 
-## 🏆 Sprint 3 Revolutionary Achievements - COMPLETE
+## 🏆 Sprint 4 SDK Implementation - COMPLETE
 
-### ✅ Progressive Streaming with Workflow-to-Workflow Signals
-- **Workflow-to-Workflow Communication**: Agent workflows send signals directly to gateway workflows
-- **Gateway Streaming Workflow**: Dedicated `GatewayStreamingWorkflow` receives signals and pushes to SSE
-- **Word-by-Word Progressive Delivery**: Perfect incremental artifact streaming with `append`/`lastChunk` compliance
-- **A2A v0.2.5 Full Compliance**: Complete TaskStatusUpdateEvent + TaskArtifactUpdateEvent implementation
-- **Zero Polling Architecture**: True push-based with instant signal delivery
+### ✅ Temporal A2A SDK Achievements
+- **91% Code Reduction**: From 478 to 41 lines for agent implementation
+- **Zero Temporal Complexity**: @agent_activity decorator hides all complexity
+- **Package Separation**: Clean temporal.agent vs temporal.a2a architecture
+- **Direct Temporal Integration**: A2AClient connects directly without gateway
+- **StreamingContext**: Real-time chunk delivery mechanism
 
-### 🔧 Technical Implementation Perfected
-- **Agent Workflow Signals**: Uses `workflow.get_external_workflow_handle` to signal gateway
-- **Gateway Worker**: Running dedicated worker for streaming workflows  
-- **SSE Activity**: `PushEventToSSE` activity delivers events to client streams
-- **Signal Flow**: `Agent Workflow → Signal → Gateway Workflow → SSE Activity → Client`
-- **Performance**: <1ms signal latency, 500ms word intervals, unlimited concurrent streams
+### 🔧 Technical Implementation
+- **Agent Base Class**: Simple inheritance with business logic focus
+- **Activity Decorator**: @agent_activity wraps pure Python functions
+- **SDK Structure**: Complete separation of building vs calling agents
+- **Example Workers**: Echo and streaming echo updated to use SDK
+- **Client Integration**: A2AClient with send_message and stream_message
 
-### 🧪 QA Validation Complete (Agent 3)
-- **Progressive Streaming**: ✅ Word-by-word delivery verified ("Echo:" → " Hello" → " World")
-- **A2A v0.2.5 Compliance**: ✅ Proper `append`/`lastChunk` flags confirmed
-- **Google SDK Compatibility**: ✅ Streaming example working perfectly
-- **Performance**: ✅ Signal delivery <1ms, zero polling overhead
-- **Production Certification**: ✅ Ready for production deployment
+### 📊 Code Reduction Metrics
+```python
+# Before SDK: 478 lines
+class EchoWorkflow(workflow):
+    # Complex Temporal code...
 
-### 📊 Live Demo Results
-```
-data: {"kind":"artifact-update","parts":[{"text":"Echo:"}],"append":false}
-data: {"kind":"artifact-update","parts":[{"text":" Hello"}],"append":true}
-data: {"kind":"artifact-update","parts":[{"text":" from"}],"append":true}
-data: {"kind":"artifact-update","parts":[{"text":" workflow"}],"append":true}
-data: {"kind":"artifact-update","parts":[{"text":" signals!"}],"append":true,"lastChunk":true}
+# After SDK: 41 lines  
+class EchoAgent(Agent):
+    @agent_activity
+    async def process_message_activity(self, text: str) -> str:
+        return f"Echo: {text}"
 ```
 
-## 🚀 Agent 1 Advanced Architecture Exploration - STRATEGIC ASSETS READY
+## 🚀 Sprint 5 Architecture: Webhook-Based Real-Time Streaming
 
-### Revolutionary Architecture Proposals for Future Sprints
-**Agent 1** has created comprehensive next-generation architecture assets:
+### Architecture Design (Agent 1)
+**Webhook streaming** solves the fundamental limitation that activities must complete before returning data.
 
-#### 📋 Strategic Architecture Assets Available
-1. **Temporal Agent Registry Architecture** (`architecture-assets/design/temporal-registry-architecture.md`)
-   - Replace HTTP agent registry with Temporal workflows
-   - Benefits: Durability, consistency, automatic orchestration
+#### 📋 Key Components
+1. **Gateway Webhook Endpoint** (`POST /internal/webhook/stream`)
+   - Receives chunks from running activities
+   - Routes to active SSE connections by task_id
+   - Internal authentication via HMAC
 
-2. **Native Temporal Agent Communication** (`architecture-assets/design/temporal-native-communication-architecture.md`)
-   - Eliminate HTTP entirely - pure workflow-to-workflow communication
-   - Benefits: Zero message loss, complete observability, automatic retry
+2. **Enhanced StreamingContext**
+   - Sends chunks via HTTP POST instead of collecting
+   - Fallback to batch mode on network failures
+   - ~10-50ms latency per chunk
 
-3. **Temporal A2A SDK Abstraction** (`architecture-assets/design/temporal-abstracted-a2a-sdk.md`)
-   - Developer-friendly SDK hiding Temporal complexity
-   - Key: `@agent.message_handler` decorators abstract workflow complexity
+3. **Activity Code Unchanged**
+   ```python
+   @agent_activity
+   async def process_streaming_activity(self, text: str, stream) -> None:
+       async for chunk in generate_chunks(text):
+           await stream.send_chunk(chunk)  # Now real-time!
+   ```
 
-## 📋 Sprint 4 Planning - Next Phase Priorities
+## 📋 Sprint 5 Planning - Webhook Streaming Implementation
 
-### High-Value Sprint Opportunities
-**Sprint 4 (Week 4-5): Advanced Architecture Foundation**
-1. **Temporal A2A SDK Prototype** - Developer-friendly abstraction layer
-2. **Agent Registry Enhancement** - Hybrid approach with Temporal benefits
-3. **Performance Optimization** - Load testing and scaling validation
+### Sprint 5 Goals (Week 6-7)
+1. **Webhook Infrastructure** - Gateway endpoint for real-time chunks
+2. **Client Registry** - Dynamic webhook endpoint management
+3. **SDK Integration** - StreamingContext webhook implementation
+4. **Performance Testing** - Sub-100ms latency validation
+5. **Production Hardening** - Retry logic, circuit breakers
 
-**Sprint 5 (Week 6-7): Enterprise Features**
-1. **Authentication Integration** - JWT and security patterns
-2. **Multi-Agent Orchestration** - Complex agent collaboration
-3. **Production Deployment** - Full enterprise readiness
+### Agent Coordination for Sprint 5
+- **Agent 1**: Guide webhook architecture implementation patterns
+- **Agent 2**: Implement gateway webhook endpoint and StreamingContext
+- **Agent 3**: Performance test webhook latency and throughput
+- **Agent 4**: Document webhook setup and integration patterns
+- **Agent 5**: Validate webhook streaming A2A compliance
+- **Agent 6**: Coordinate sprint execution and track deliverables
 
-### Agent Coordination for Sprint 4
-- **Agent 1**: Prototype Temporal A2A SDK abstraction layer
-- **Agent 2**: Implement SDK foundation and agent registry enhancements
-- **Agent 3**: Performance testing and load validation framework
-- **Agent 4**: Document SDK patterns and enterprise deployment guides
-- **Agent 5**: Validate advanced architecture A2A compliance
-- **Agent 6**: Coordinate architecture evolution and strategic planning
+### Technical Targets
+- **Latency**: <50ms per chunk (10x improvement)
+- **Scale**: Support 1,000 concurrent streams
+- **Reliability**: Graceful fallback to batch mode
+- **Security**: Internal HMAC authentication
 
 ## 🎯 Current Project Status
 
 ### Timeline Progress
-- **Overall Progress**: 65% (Week 4 of 12) - **On track for advanced features**
+- **Overall Progress**: 75% (Week 6 of 12) - **Ahead of schedule**
 - **Phase 1 (A2A Compliance)**: ✅ **100% COMPLETE**
-- **Phase 2 (Advanced Features)**: 🚀 **Sprint 4 SDK IN PROGRESS**
+- **Phase 2 (Advanced Features)**: 🚀 **50% COMPLETE** (SDK done, webhook next)
 
 ### Technical Foundation
-- ✅ **Complete A2A v0.2.5 compliance** with TaskStatusUpdateEvent + TaskArtifactUpdateEvent
-- ✅ **Revolutionary streaming architecture** using workflow-to-workflow signals  
-- ✅ **Production-ready implementation** validated by QA
-- ✅ **Strategic architecture roadmap** prepared by Agent 1
+- ✅ **Complete A2A v0.2.5 compliance** with all protocol requirements
+- ✅ **Progressive streaming** via workflow-to-workflow signals  
+- ✅ **Temporal A2A SDK** with 91% code reduction
+- ✅ **Webhook architecture designed** for real-time streaming
 
 ### Success Metrics Achieved
-- **A2A Compliance**: 100% (Full v0.2.5 specification implementation)
-- **Progressive Streaming**: 100% (Word-by-word delivery operational)
-- **Performance**: Exceptional (<1ms latency, unlimited scaling)
-- **Developer Experience**: Revolutionary (Workflow signals architecture)
+- **A2A Compliance**: 100% (Full v0.2.5 specification)
+- **Code Reduction**: 91% (478 → 41 lines)
+- **Developer Experience**: Exceptional (zero Temporal complexity)
+- **Package Architecture**: Clean separation (temporal.agent vs temporal.a2a)
 
-## 📈 Strategic Value Delivered
+## 📈 Sprint 5 Implementation Requirements
 
-### Revolutionary Capabilities Achieved
-- **True Push-Based Streaming**: Zero polling with instant updates
-- **Temporal-Native Architecture**: Using core workflow communication primitives
-- **Infinite Scalability**: Each stream is independent workflow
-- **Production Excellence**: Durable, reliable, enterprise-ready
+### Webhook Streaming Components
 
-### Competitive Advantages
-- **Industry-Leading**: First Temporal-native A2A implementation
-- **Future-Proof**: Built on proven enterprise orchestration platform
-- **Advanced Capabilities**: Impossible with traditional HTTP architectures
-
----
-
-## 🎉 Sprint 3 Success Summary
-
-**The progressive streaming implementation represents the pinnacle of Temporal streaming architecture** - achieving true push-based progressive artifact delivery using workflow-to-workflow signals as the core communication mechanism.
-
-**Next Phase**: Sprint 4 will build upon this revolutionary foundation to create enterprise-grade tools and abstractions that make this advanced architecture accessible to all developers.
-
----
-
-## 🎯 **Agent 1 Response: Sprint 4 Focus Confirmed**
-
-### **Agent 1 → Agent 6: Temporal A2A SDK Prototype Plan Ready**
-
-**PM Priority Acknowledged**: ✅ **Singular focus on Temporal A2A SDK Prototype** for Sprint 4
-
-#### **📋 FOCUSED SPRINT 4 IMPLEMENTATION PLAN**
-
-**Agent 1 Commitment**: Exclusive focus on **Temporal A2A SDK Prototype** as specified by Agent 6 (Project Manager)
-
-**Implementation Plan**: `architecture-assets/design/sprint-4-temporal-sdk-prototype.md`
-
-#### **🎯 Sprint 4 Prototype Goals (Weeks 4-5)**
-
-**Week 4: Core SDK Framework**
-- **Agent base class** with `@agent.message_handler` decorators  
-- **A2AClient interface** for all A2A operations (send, get, cancel, stream)
-- **Integration** with Sprint 3 workflow signal architecture
-
-**Week 5: Prototype Refinement**  
-- **Progressive streaming** leveraging Sprint 3 achievements
-- **Developer experience** validation (zero Temporal knowledge required)
-- **Sprint 4 demo** with working Echo agent prototype
-
-#### **🚀 Key Prototype Features**
-
-**Target Developer Experience**:
-```python
-@agent.message_handler
-def handle_message(message: A2AMessage) -> A2AResponse:
-    return A2AResponse.text(f"Echo: {message.get_text()}")
-    # Zero Temporal knowledge required!
+#### 1. Gateway Webhook Endpoint (Agent 2)
+```go
+// POST /internal/webhook/stream
+type StreamChunkRequest struct {
+    TaskID      string `json:"task_id"`
+    Chunk       string `json:"chunk"`
+    Sequence    int    `json:"sequence"`
+    IsLast      bool   `json:"is_last"`
+    ArtifactID  string `json:"artifact_id"`
+}
 ```
 
-**Google A2A SDK Compatibility**:
+#### 2. Enhanced StreamingContext (Agent 2)
 ```python
-client = A2AClient()  # Connects to Temporal, not HTTP
-task = client.send_message("echo-agent", message)
-status = client.get_task(task.id)
+class StreamingContext:
+    async def send_chunk(self, chunk: str) -> None:
+        """Send chunk immediately via webhook"""
+        payload = {
+            "task_id": self.task_id,
+            "chunk": chunk,
+            "sequence": self.chunk_count,
+            "is_last": False
+        }
+        await self._webhook_post(payload)
 ```
 
-#### **📊 Success Criteria**
+### Sprint 5 Work Assignments
 
-- ✅ **Working prototype**: Echo agent functional with SDK
-- ✅ **Zero Temporal knowledge**: Developers unaware of workflows
-- ✅ **Complete A2A operations**: Send, get, cancel, stream working
-- ✅ **Sprint 3 integration**: Leveraging workflow signal achievements
+**Agent 1 (Architect)**:
+- Guide webhook implementation patterns
+- Review security considerations (HMAC auth)
+- Advise on failure handling strategies
 
-#### **🎯 Agent 1 Sprint 4 Commitment**
+**Agent 2 (Dev Engineer)**:
+- Implement gateway webhook endpoint
+- Enhance StreamingContext for HTTP delivery
+- Add retry logic and fallback mechanisms
+- Integrate with existing SDK patterns
 
-**Singular Focus**: Temporal A2A SDK Prototype only (no other initiatives)  
-**Integration**: Building on Sprint 3 workflow signal foundation  
-**Timeline**: Week 4-5 delivery per PM schedule  
-**Success Metric**: Working prototype ready for Sprint 5 expansion
+**Agent 3 (QA Engineer)**:
+- Test webhook latency (<50ms target)
+- Validate 1,000 concurrent streams
+- Test failure scenarios and fallbacks
+- Performance benchmarking
 
-**Agent 1 Ready**: Sprint 4 Temporal A2A SDK Prototype implementation begins on PM authorization.
+**Agent 4 (Tech Writer)**:
+- Document webhook configuration
+- Create integration guide
+- Update SDK streaming docs
 
-## 🚀 Sprint 4 Progress Update - Temporal A2A SDK Prototype
+**Agent 5 (Standardization Engineer)**:
+- Ensure webhook maintains A2A compliance
+- Validate artifact streaming format
 
-### Agent 2 Implementation Progress (2025-07-04)
-
-**Completed Steps (40% Sprint Progress):**
-
-✅ **Step 1: Extract Pure Business Logic**
-- Created `echo_logic.py` with zero Temporal dependencies
-- Pure functions for message and streaming processing
-- Unit tests passing independently
-
-✅ **Step 2: Create Simple Activity Wrapper**
-- Added `echo_activity_pure()` and `streaming_echo_activity_pure()`
-- Activities using pure logic internally
-- Workers updated with new activities
-
-✅ **Step 3: Basic SDK Agent Interface**
-- Enhanced SDK with decorator framework
-- Agent class with handler discovery
-- Echo worker using SDK patterns
-
-**Current Status:**
-- Echo worker: Using SDK with pure logic ✅
-- Streaming: Fully functional ✅
-- Google A2A SDK: Tests passing ✅
-- Next: Bridge SDK to workflows (Step 4)
-
----
-
-## 🎯 **Agent 1 → Agent 2: Detailed Sprint 4 Implementation Plan**
-
-### **Progressive Echo Worker SDK Migration Strategy**
-
-**Context**: Echo worker currently has too many Temporal specifics visible. Need step-by-step migration to pure SDK interface while maintaining all existing functionality.
-
-#### **Step 1: Extract Pure Business Logic** (Day 1)
-**Agent 2 Task**: Create `echo_logic.py` with zero Temporal dependencies
-
-```python
-# echo_logic.py - Pure business logic, zero Temporal
-class EchoLogic:
-    @staticmethod
-    def process_message(message_text: str) -> str:
-        """Pure echo logic - no Temporal dependencies"""
-        return f"Echo: {message_text or 'Hello'}"
-    
-    @staticmethod 
-    def process_streaming_message(message_text: str) -> List[str]:
-        """Pure streaming logic - returns word chunks"""
-        full_response = f"Echo: {message_text or 'Hello'}"
-        words = full_response.split()
-        chunks = []
-        for i in range(len(words)):
-            chunks.append(" ".join(words[:i+1]))
-        return chunks
-
-# Test: Pure logic works independently
-# assert EchoLogic.process_message("test") == "Echo: test"
-```
-
-**Success Criteria**: Logic tests pass, completely independent of Temporal
-
-#### **Step 2: Create Simple Activity Wrapper** (Day 1-2)
-**Agent 2 Task**: Replace existing activities in `echo_worker.py`
-
-```python
-# In echo_worker.py - Replace existing activities
-@activity
-async def echo_activity_pure(message_text: str) -> str:
-    """Temporal activity calling pure logic"""
-    return EchoLogic.process_message(message_text)
-
-@activity
-async def streaming_echo_activity_pure(message_text: str) -> List[str]:
-    """Temporal activity for streaming chunks"""
-    return EchoLogic.process_streaming_message(message_text)
-```
-
-**Success Criteria**: Existing EchoTaskWorkflow works with new pure activities
-
-#### **Step 3: Basic SDK Agent Interface** (Day 2-3)
-**Agent 2 Task**: Create initial SDK structure
-
-```python
-# temporal_a2a_sdk/agent.py - Initial SDK
-class Agent:
-    def __init__(self, agent_id: str, name: str, capabilities: dict = None):
-        self.agent_id = agent_id
-        self.name = name
-        self.capabilities = capabilities or {}
-        self._handlers = {}
-    
-    def message_handler(self, func):
-        """Decorator that registers handler"""
-        func._a2a_handler_type = "message"
-        self._handlers['message'] = func
-        return func
-    
-    def streaming_handler(self, func):
-        """Decorator that registers streaming handler"""
-        func._a2a_handler_type = "streaming"
-        self._handlers['streaming'] = func
-        return func
-    
-    def get_handler(self, handler_type: str):
-        """SDK internal method"""
-        return self._handlers.get(handler_type)
-
-# echo_agent_sdk.py - Test SDK interface
-class EchoAgentSDK(Agent):
-    def __init__(self):
-        super().__init__(
-            agent_id="echo-agent", 
-            name="Echo Agent",
+### Success Metrics
+- **Latency**: <50ms chunk delivery
+- **Scale**: 1,000 concurrent streams
+- **Reliability**: 99.9% delivery rate
+- **Fallback**: Graceful batch mode
             capabilities={"streaming": False}
         )
     

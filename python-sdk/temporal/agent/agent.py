@@ -10,7 +10,6 @@ from temporalio import workflow, activity
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from temporal.a2a.messages import A2AMessage, A2AResponse
 from .runner import AgentRunner
 from .decorators import message_handler as _message_handler_decorator
 from .decorators import streaming_handler as _streaming_handler_decorator
@@ -52,7 +51,7 @@ def agent_activity(func):
     @functools.wraps(func)
     async def wrapper(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         # Import A2A types in the activity process
-        from temporal.a2a.messages import A2AMessage, A2AResponse, A2AStreamingResponse
+        from .messages import A2AMessage, A2AResponse, A2AStreamingResponse
         from .streaming import streaming_context
         
         # Convert message data to A2AMessage

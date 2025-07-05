@@ -1,8 +1,92 @@
 """
 A2A Message abstractions - Python-specific implementation
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
+from enum import Enum
+
+
+# Core A2A Types per v0.2.5 specification
+
+class TaskState(Enum):
+    """Task state enumeration per A2A v0.2.5"""
+    SUBMITTED = "submitted"
+    WORKING = "working"
+    INPUT_REQUIRED = "input-required"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+    FAILED = "failed"
+    REJECTED = "rejected"
+    AUTH_REQUIRED = "auth-required"
+    UNKNOWN = "unknown"
+
+
+class A2APart:
+    """Base class for A2A parts - union of TextPart, FilePart, DataPart"""
+    
+    def __init__(self, kind: str, metadata: Optional[Dict[str, Any]] = None):
+        self.kind = kind
+        self.metadata = metadata or {}
+    
+    @staticmethod
+    def text(text: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create a text part"""
+        part = {"kind": "text", "text": text}
+        if metadata:
+            part["metadata"] = metadata
+        return part
+    
+    @staticmethod
+    def file(file_data: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create a file part"""
+        part = {"kind": "file", "file": file_data}
+        if metadata:
+            part["metadata"] = metadata
+        return part
+    
+    @staticmethod
+    def data(data: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create a data part"""
+        part = {"kind": "data", "data": data}
+        if metadata:
+            part["metadata"] = metadata
+        return part
+
+
+class A2AStatus:
+    """Task status per A2A v0.2.5 specification"""
+    
+    def __init__(self, state: Union[str, TaskState], 
+                 message: Optional[Dict[str, Any]] = None,
+                 timestamp: Optional[str] = None):
+        if isinstance(state, TaskState):
+            self.state = state.value
+        else:
+            self.state = state
+        self.message = message
+        self.timestamp = timestamp or datetime.utcnow().isoformat() + "Z"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        result = {"state": self.state}
+        if self.message:
+            result["message"] = self.message
+        if self.timestamp:
+            result["timestamp"] = self.timestamp
+        return result
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "A2AStatus":
+        """Create from dictionary"""
+        return cls(
+            state=data.get("state", "unknown"),
+            message=data.get("message"),
+            timestamp=data.get("timestamp")
+        )
+
+
+# Type alias for metadata
+A2AMetadata = Optional[Dict[str, Any]]
 
 
 class A2AMessage:
