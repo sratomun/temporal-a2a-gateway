@@ -89,10 +89,8 @@ class EchoAgent(Agent):
         
         return A2AResponse.text(response_text)
     
-    @agent.capability("greeting")
-    def handle_greeting(self, message: A2AMessage) -> A2AResponse:
-        """Capability-specific handler"""
-        return A2AResponse.text("Hello! I'm an echo agent.")
+    # A2A capabilities declared in constructor, not as handlers
+    # self.capabilities = {"streaming": False, "content_types": ["text"]}
     
     # Optional: State management (automatically persisted by Temporal)
     def get_conversation_state(self, context_id: str) -> dict:
@@ -228,13 +226,6 @@ def streaming_handler(func):
     func._a2a_handler_config = {"supports_streaming": True}
     return func
 
-def capability(capability_name: str):
-    """Decorator for capability-specific handlers"""
-    def decorator(func):
-        func._a2a_handler_type = "capability"
-        func._a2a_handler_config = {"capability": capability_name}
-        return func
-    return decorator
 
 def context_aware(func):
     """Decorator for handlers that need conversation context"""
@@ -249,74 +240,177 @@ def rate_limited(requests_per_minute: int):
     return decorator
 ```
 
-### 4. Complete A2A Client Interface
+### 4. Universal A2A Client Interface
 
-#### Full A2A Protocol Client
+#### Universal A2A Protocol Client (Developer View)
+**Updated**: Now supports agents anywhere - Temporal, HTTP, gRPC, etc.
 ```python
-from temporal_a2a_sdk import A2AClient
+from temporal_a2a_sdk import A2AClient, A2AMessage
 
-class TemporalA2AClient:
-    """Complete A2A protocol client backed by Temporal workflows"""
+class A2AClient:
+    """Universal A2A protocol client - works with agents anywhere"""
     
-    def __init__(self, temporal_host="localhost:7233", namespace="default"):
-        self.temporal_client = TemporalClient.connect(temporal_host, namespace)
+    def __init__(self, config=None):
+        # SDK handles discovery and transport complexity
+        self.config = config or A2AClientConfig()
+        self.registry = self._setup_agent_registry()
+        self.transports = self._setup_transports()  # Temporal, HTTP, gRPC, etc.
     
-    # A2A message/send
-    def send_message(self, agent_id: str, message: A2AMessage) -> A2ATaskResult:
-        """Send message to agent - creates task workflow"""
-        agent_workflow_id = self._discover_agent_workflow(agent_id)
+    # A2A message/send (Developer perspective: simple message sending)
+    async def send_message(self, agent_id: str, message: str) -> A2ATask:
+        """Send message to agent - works with any transport"""
+        # What developer sees: Simple message sending
+        # What actually happens: Agent discovery + transport routing
         
-        # Signal agent workflow to create task
-        return self.temporal_client.signal_workflow(
-            agent_workflow_id, "SendMessage", message
-        )
+        # SDK Internal: Find agent → determine transport → route message
+        agent_info = await self.registry.discover_agent(agent_id)
+        transport = self.transports.get_transport(agent_info.uri)
+        return await transport.send_message(agent_info, message)
     
-    # A2A tasks/get  
+    # A2A tasks/get (Developer perspective: check task status)  
     def get_task(self, task_id: str) -> A2ATask:
-        """Get task status - queries task workflow"""
-        task_workflow_id = self._get_task_workflow_id(task_id)
+        """Get task status - developer thinks it's querying a database"""
+        # What developer sees: Simple status lookup
+        # What actually happens: Temporal workflow query
         
-        return self.temporal_client.query_workflow(
-            task_workflow_id, "GetTaskStatus"
-        )
+        # SDK Internal: Query task workflow state
+        return self._internal_get_task(task_id)
     
-    # A2A tasks/cancel
+    # A2A tasks/cancel (Developer perspective: cancel operation)
     def cancel_task(self, task_id: str) -> bool:
-        """Cancel task - signals task workflow"""
-        task_workflow_id = self._get_task_workflow_id(task_id)
+        """Cancel task - developer thinks it's a simple cancellation"""
+        # What developer sees: Boolean success/failure
+        # What actually happens: Temporal workflow cancellation/signal
         
-        self.temporal_client.signal_workflow(
-            task_workflow_id, "CancelTask"
-        )
-        return True
+        # SDK Internal: Cancel or signal task workflow
+        return self._internal_cancel_task(task_id)
     
-    # A2A message/stream
+    # A2A message/stream (Developer perspective: iterator of updates)
     def stream_message(self, agent_id: str, message: A2AMessage) -> Iterator[A2ATaskUpdate]:
-        """Stream message response - uses update handlers"""
-        task_result = self.send_message(agent_id, message)
-        task_workflow_id = self._get_task_workflow_id(task_result.id)
+        """Stream message response - developer sees simple iterator"""
+        # What developer sees: Simple iterator yielding updates
+        # What actually happens: Temporal update polling or signal listening
         
-        # Stream updates using Temporal update handlers
-        while True:
-            update = self.temporal_client.update_workflow(
-                task_workflow_id, "GetProgressUpdate"
-            )
-            
-            if update:
-                yield A2ATaskUpdate.from_dict(update)
-                if update.get("status") in ["completed", "failed", "cancelled"]:
-                    break
-            
-            time.sleep(0.1)  # 100ms polling
+        # SDK Internal: Multiple implementation options
+        return self._internal_stream_message(agent_id, message)
     
-    # A2A discovery
+    # A2A discovery (Developer perspective: search for agents)
     def discover_agents(self, criteria: dict = None) -> List[A2AAgentCard]:
-        """Discover agents - queries registry workflow"""
-        registry_workflow_id = "agent-registry"
+        """Discover agents - developer thinks it's searching a directory"""
+        # What developer sees: Simple agent search
+        # What actually happens: Registry workflow query
         
-        return self.temporal_client.query_workflow(
-            registry_workflow_id, "DiscoverAgents", criteria or {}
+        # SDK Internal: Query registry workflow
+        return self._internal_discover_agents(criteria)
+
+# SDK Internal Implementation (Hidden from Developer)
+class TemporalA2AClient:
+    def _internal_send_message(self, agent_id: str, message: A2AMessage) -> A2ATaskResult:
+        """SDK handles complexity: agent discovery + task workflow creation"""
+        
+        # Option A: Direct task workflow creation
+        task_id = self._generate_task_id()
+        workflow_options = {"ID": task_id}
+        
+        execution = self.temporal_client.execute_workflow(
+            workflow_options, "TaskWorkflow", {
+                "agent_id": agent_id,
+                "message": message,
+                "task_id": task_id
+            }
         )
+        
+        return A2ATaskResult(id=task_id, status="submitted")
+        
+        # Option B: Signal agent workflow
+        # agent_workflow_id = self._discover_agent_workflow(agent_id)
+        # self.temporal_client.signal_workflow(agent_workflow_id, "CreateTask", {
+        #     "task_id": task_id,
+        #     "message": message
+        # })
+    
+    def _internal_get_task(self, task_id: str) -> A2ATask:
+        """SDK handles complexity: workflow state query"""
+        
+        # Query task workflow directly
+        task_state = self.temporal_client.query_workflow(
+            task_id, "", "GetTaskStatus"
+        )
+        
+        # Convert to A2A standard format
+        return A2ATask(
+            id=task_state["id"],
+            status=task_state["status"],
+            artifacts=task_state["artifacts"],
+            # ... other A2A fields
+        )
+    
+    def _internal_cancel_task(self, task_id: str) -> bool:
+        """SDK handles complexity: workflow cancellation strategies"""
+        
+        try:
+            # Option A: Graceful cancellation via signal
+            self.temporal_client.signal_workflow(task_id, "", "CancelTask")
+            return True
+            
+            # Option B: Hard cancellation
+            # self.temporal_client.cancel_workflow(task_id, "")
+            
+        except Exception:
+            return False
+    
+    def _internal_stream_message(self, agent_id: str, message: A2AMessage) -> Iterator[A2ATaskUpdate]:
+        """SDK handles complexity: multiple streaming strategies"""
+        
+        # Start the task
+        task_result = self._internal_send_message(agent_id, message)
+        
+        # Strategy A: Polling task workflow updates
+        def polling_strategy():
+            last_update_time = 0
+            while True:
+                try:
+                    # Poll task workflow for updates
+                    update = self.temporal_client.update_workflow(
+                        task_result.id, "", "GetProgressUpdate"
+                    )
+                    
+                    if update and update.get("timestamp", 0) > last_update_time:
+                        last_update_time = update["timestamp"]
+                        yield A2ATaskUpdate.from_dict(update)
+                        
+                        if update.get("status") in ["completed", "failed", "cancelled"]:
+                            break
+                            
+                    time.sleep(0.1)  # 100ms polling
+                    
+                except Exception:
+                    break
+        
+        # Strategy B: Use Sprint 3 gateway streaming (if available)
+        def gateway_streaming_strategy():
+            # Connect to existing SSE gateway streaming
+            stream_id = self._start_gateway_stream(task_result.id)
+            
+            for sse_event in self._connect_to_sse_stream(stream_id):
+                yield A2ATaskUpdate.from_sse_event(sse_event)
+        
+        # SDK chooses strategy based on configuration
+        if self.use_gateway_streaming:
+            return gateway_streaming_strategy()
+        else:
+            return polling_strategy()
+    
+    def _internal_discover_agents(self, criteria: dict = None) -> List[A2AAgentCard]:
+        """SDK handles complexity: registry workflow queries"""
+        
+        # Query registry workflow
+        agents = self.temporal_client.query_workflow(
+            "agent-registry", "", "DiscoverAgents", criteria or {}
+        )
+        
+        # Convert to A2A standard format
+        return [A2AAgentCard.from_dict(agent) for agent in agents]
 
 # Usage - identical to Google A2A SDK
 client = TemporalA2AClient()
@@ -335,7 +429,7 @@ for update in client.stream_message("echo-agent", A2AMessage.text("Hello")):
 client.cancel_task(task.id)
 
 # Discover agents (queries registry)
-agents = client.discover_agents({"capabilities": ["greeting"]})
+agents = client.discover_agents({"capabilities": {"streaming": True}})
 ```
 
 ### 5. Automatic Workflow Generation
@@ -383,13 +477,13 @@ class TemporalWorkflowFactory:
             
             def _find_handler(self, message: A2AMessage):
                 """Find appropriate message handler based on decorators"""
-                # Check capability-specific handlers first
-                for method_name in dir(self.agent_instance):
-                    method = getattr(self.agent_instance, method_name)
-                    if hasattr(method, '_a2a_handler_type'):
-                        if method._a2a_handler_type == "capability":
-                            # Match capability logic
-                            pass
+                # Check for streaming vs regular handler based on agent capabilities
+                if self.agent_instance.capabilities.get("streaming", False):
+                    # Look for streaming handler if agent supports streaming
+                    for method_name in dir(self.agent_instance):
+                        method = getattr(self.agent_instance, method_name)
+                        if hasattr(method, '_a2a_handler_type') and method._a2a_handler_type == "streaming":
+                            return method
                 
                 # Fall back to default message handler
                 return self.agent_instance.handle_message

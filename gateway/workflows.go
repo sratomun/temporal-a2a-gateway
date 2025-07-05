@@ -103,7 +103,12 @@ func convertProgressToStreamingEvents(update ProgressUpdate, lastSentPosition *i
 						
 						// Set artifact ID if first chunk
 						if *artifactID == "" {
-							*artifactID = fmt.Sprintf("echo-%s", update.TaskID[:8])
+							// Use artifact ID from the update if provided, otherwise generate one
+							if providedID, ok := update.Artifact["artifactId"].(string); ok && providedID != "" {
+								*artifactID = providedID
+							} else {
+								*artifactID = fmt.Sprintf("artifact-%s", update.TaskID[:8])
+							}
 						}
 
 						artifactEvent := TaskArtifactUpdateEvent{

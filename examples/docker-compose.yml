@@ -128,9 +128,11 @@ services:
       retries: 5
       start_period: 30s
 
-  # Echo Agent Worker
+  # Echo Agent Worker (Non-Streaming)
   echo-worker:
-    build: ../workers
+    build:
+      context: ../
+      dockerfile: workers/Dockerfile
     environment:
       - TEMPORAL_HOST=temporal
       - TEMPORAL_PORT=7233
@@ -144,6 +146,45 @@ services:
     networks:
       - a2a-network
     restart: unless-stopped
+
+  # Streaming Echo Agent Worker
+  streaming-echo-worker:
+    build:
+      context: ../
+      dockerfile: workers/Dockerfile.streaming
+    environment:
+      - TEMPORAL_HOST=temporal
+      - TEMPORAL_PORT=7233
+      - TEMPORAL_NAMESPACE=default
+      - TASK_QUEUE=streaming-echo-agent-tasks
+    depends_on:
+      temporal:
+        condition: service_healthy
+      a2a-gateway:
+        condition: service_healthy
+    networks:
+      - a2a-network
+    restart: unless-stopped
+
+  # SDK Test Runner
+  sdk-tests:
+    build:
+      context: ../
+      dockerfile: python-sdk/Dockerfile.test
+    environment:
+      - GATEWAY_URL=http://a2a-gateway:8080
+    depends_on:
+      a2a-gateway:
+        condition: service_healthy
+      echo-worker:
+        condition: service_started
+      streaming-echo-worker:
+        condition: service_started
+    networks:
+      - a2a-network
+    profiles:
+      - tests
+
 
 volumes:
   postgres_data:

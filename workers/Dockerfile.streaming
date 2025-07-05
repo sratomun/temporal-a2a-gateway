@@ -13,12 +13,15 @@ COPY workers/requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy SDK (for transition phase)
+# Copy SDK
 COPY python-sdk /app/python-sdk
 
 # Copy worker code
-COPY workers/echo_worker.py .
+COPY workers/streaming_echo_worker.py .
 COPY workers/echo_logic.py .
 
-# Run the worker
-CMD ["python", "echo_worker.py"]
+# Set PYTHONPATH to include current directory
+ENV PYTHONPATH=/app:/app/python-sdk
+
+# Run the streaming worker
+CMD ["python", "streaming_echo_worker.py"]

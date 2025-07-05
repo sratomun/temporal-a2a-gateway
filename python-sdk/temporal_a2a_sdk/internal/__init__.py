@@ -1,0 +1,1 @@
+"""Internal Temporal implementation details - not part of public API"""

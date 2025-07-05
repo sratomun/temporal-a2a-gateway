@@ -221,24 +221,25 @@
 
 ## Action Items
 
-### Immediate (This Week - Sprint 3 Implementation)
-1. **Agent 2**: Implement TaskArtifactUpdateEvent using Agent 5 specification assets
-2. **Agent 2**: Add progressive artifact chunking with `append` and `lastChunk` support
-3. **Agent 1**: Finalize word-by-word streaming architecture on TaskArtifactUpdateEvent foundation
-4. **Agent 3**: Validate TaskArtifactUpdateEvent implementation against A2A v0.2.5 specification
-5. **Agent 2**: Implement real-time content building in echo worker
+### Immediate (This Week - Sprint 4 Implementation)
+1. **Agent 1**: Prototype Temporal A2A SDK abstraction layer with @agent.message_handler patterns
+2. **Agent 2**: Implement SDK foundation and agent registry enhancements
+3. **Agent 3**: Develop performance load testing framework for 1000+ concurrent streams
+4. **Agent 4**: Document SDK abstraction patterns and enterprise deployment guides
+5. **Agent 5**: Validate advanced architecture A2A compliance for SDK abstractions
 
-### Short-term (Week 4 - Sprint 3 Implementation)
-1. **Agent 2**: Implement TaskArtifactUpdateEvent with chunking support
-2. **Agent 2**: Add progressive artifact building to echo workflow
-3. **Agent 3**: Integration testing with real-time content streaming
-4. **Agent 4**: Update documentation with progressive streaming examples
+### Short-term (Week 5 - Sprint 4 Completion)
+1. **Agent 2**: Complete SDK prototype with developer-friendly abstractions
+2. **Agent 2**: Finalize agent registry hybrid Temporal implementation
+3. **Agent 3**: Enterprise-scale load testing validation
+4. **Agent 4**: Complete SDK development documentation and examples
+5. **Agent 5**: Final advanced architecture A2A compliance certification
 
-### Medium-term (Week 5 - Sprint 3 Completion)
-1. **Agent 2**: Performance optimization for progressive streaming
-2. **Agent 3**: Load testing with progressive artifact updates
-3. **Agent 5**: Final A2A v0.2.5 progressive streaming compliance validation
-4. **All**: Sprint 3 completion and Phase 1 delivery
+### Medium-term (Week 6-8 - Sprint 5 Enterprise Features)
+1. **Agent 2**: Authentication integration with SDK compatibility
+2. **Agent 3**: Security testing suite development
+3. **Agent 4**: Enterprise security documentation
+4. **All**: Sprint 5 enterprise features completion
 
 ## Communication Channels
 
