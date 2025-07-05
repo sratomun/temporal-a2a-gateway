@@ -1,6 +1,25 @@
-# Temporal A2A SDK - Protocol Interface
-# This contains the full A2A protocol implementation
-from temporal_a2a_sdk.client import A2AClient
-from temporal_a2a_sdk.messages import A2AMessage, A2AResponse
+"""
+temporal.a2a - SDK for calling A2A agents via Temporal
+"""
 
-__all__ = ['A2AClient', 'A2AMessage', 'A2AResponse']
+from .client import A2AClient
+from .messages import (
+    A2AMessage,
+    A2AResponse,
+    A2ATask,
+    A2AArtifact,
+    A2AProgressUpdate
+)
+from .exceptions import A2AException, TaskNotFoundException
+
+__version__ = "0.1.0"
+__all__ = [
+    "A2AClient",
+    "A2AMessage",
+    "A2AResponse", 
+    "A2ATask",
+    "A2AArtifact",
+    "A2AProgressUpdate",
+    "A2AException",
+    "TaskNotFoundException",
+]

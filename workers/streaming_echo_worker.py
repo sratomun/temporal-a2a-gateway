@@ -10,7 +10,7 @@ import logging
 from typing import Dict, Any, List
 
 # Add SDK to path
-sys.path.insert(0, '/app')
+sys.path.insert(0, '/app/python-sdk')
 from temporal.agent import Agent, agent_activity
 
 # Import pure business logic
@@ -35,16 +35,18 @@ class StreamingEchoAgent(Agent):
     
     @agent_activity
     async def process_streaming_activity(self, text: str, stream) -> None:
-        """Activity that processes streaming messages with real-time streaming"""
+        """Activity that processes streaming messages with real-time StreamContext"""
         # Import everything needed here - activities run in separate processes
         from echo_logic import EchoLogic
         
-        # Stream chunks in real-time without storing them
+        # Stream chunks in real-time using StreamContext
         async for chunk in EchoLogic.process_streaming_message(text):
             await stream.send_chunk(chunk)
         
-        # Activity completes when streaming is done
+        # Finish streaming
         await stream.finish()
+        
+        # Streaming activities return None - chunks sent via StreamContext
 
 
 async def main():

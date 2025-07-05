@@ -1,14 +1,19 @@
 {
         "name": "echo-agent",
-        "description": "Simple echo agent for testing A2A protocol integration",
+        "description": "Basic echo agent for standard A2A task completion (non-streaming)",
         "version": "1.0.0",
         "url": "http://localhost:8080/agents/echo-agent",
         "capabilities": {
-            "streaming": False,
-            "pushNotifications": False,
-            "stateTransitionHistory": True
+            "streaming": false,
+            "pushNotifications": false,
+            "stateTransitionHistory": true
         },
-        "skills": [],
+        "skills": [
+            {
+                "name": "echo_message",
+                "description": "Echoes the input message with standard A2A task completion"
+            }
+        ],
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text"],
         "securitySchemes": {}

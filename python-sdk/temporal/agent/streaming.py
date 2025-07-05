@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, List
 from temporalio import activity
 import logging
 
-from .messages import A2AArtifact, A2AProgressUpdate
+from temporal.a2a.messages import A2AArtifact, A2AProgressUpdate
 
 logger = logging.getLogger(__name__)
 

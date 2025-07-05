@@ -141,22 +141,6 @@ async def test_google_a2a_sdk_streaming():
                 )
             )
             
-            # Create streaming request manually since SDK may not have streaming methods yet
-            stream_url = f"{agent_card.url}"
-            stream_data = {
-                "jsonrpc": "2.0",
-                "method": "message/stream",  # A2A v0.2.5 streaming method
-                "params": {
-                    "message": {
-                        "messageId": message.messageId,
-                        "role": message.role,
-                        "parts": [{"text": test_message}]  # Use the original text directly
-                    },
-                    "metadata": {"streaming": True, "test": "google-sdk-streaming"}
-                },
-                "id": "stream-req-001"
-            }
-            
             print("📡 Connecting to streaming endpoint...")
             
             # A2A v0.2.5 COMPLIANT: SSE headers for streaming
@@ -165,6 +149,11 @@ async def test_google_a2a_sdk_streaming():
                 "Cache-Control": "no-cache",
                 "Content-Type": "application/json"
             }
+            
+            # Use SDK request object and serialize it properly
+            stream_url = f"{agent_card.url}"
+            stream_data = stream_request.model_dump(mode='json')
+            stream_data["method"] = "message/stream"  # A2A v0.2.5 streaming method
             
             # Start streaming request
             async with http_client.stream(

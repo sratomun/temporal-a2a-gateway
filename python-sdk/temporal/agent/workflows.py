@@ -8,7 +8,7 @@ from temporalio import workflow, activity
 import asyncio
 import inspect
 
-from .messages import A2AMessage, A2AResponse
+from temporal.a2a.messages import A2AMessage, A2AResponse
 
 
 # Global agent registry - maps agent_id to agent instance
